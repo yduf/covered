@@ -73,6 +73,7 @@ bool Scanner::scan_dir(int dir_fd, uint64_t dir_inode, const std::string& path) 
         if (fstatat(dir_fd, entry->d_name, &st, AT_SYMLINK_NOFOLLOW) < 0) {
             std::cout << "\n" << std::flush;
             std::cerr << "Warning: cannot stat '" << sub_path << "': " << std::strerror(errno) << "\n";
+            skipped_++;
             continue;
         }
 
@@ -86,6 +87,7 @@ bool Scanner::scan_dir(int dir_fd, uint64_t dir_inode, const std::string& path) 
             if (sub_fd < 0) {
                 std::cout << "\n" << std::flush;
                 std::cerr << "Warning: cannot open directory '" << sub_path << "': " << std::strerror(errno) << "\n";
+                skipped_++;
                 continue;
             }
 
