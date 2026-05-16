@@ -21,6 +21,8 @@ public:
     uint64_t clusters_processed() const { return clusters_processed_; }
     uint64_t files_covered()      const { return files_covered_; }
     uint64_t files_checked()      const { return files_checked_; }
+    uint64_t head_hashes_computed() const { return head_hashes_computed_; }
+    uint64_t full_hashes_computed() const { return full_hashes_computed_; }
 
 private:
     struct FileInfo {
@@ -43,12 +45,21 @@ private:
     std::string src_root_;
     std::string bkp_root_;
 
-    std::unordered_map<uint64_t, std::string> dir_name_cache_;
-    std::unordered_map<uint64_t, uint64_t> dir_parent_cache_;
+    struct DirCache {
+        std::unordered_map<uint64_t, std::string> name;
+        std::unordered_map<uint64_t, uint64_t> parent;
+    };
+
+    DirCache& get_dir_cache(Database& db);
+
+    DirCache src_dir_cache_;
+    DirCache bkp_dir_cache_;
 
     uint64_t clusters_processed_ = 0;
     uint64_t files_covered_ = 0;
     uint64_t files_checked_ = 0;
+    uint64_t head_hashes_computed_ = 0;
+    uint64_t full_hashes_computed_ = 0;
 };
 
 } // namespace covered

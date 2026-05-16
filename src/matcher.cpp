@@ -20,18 +20,24 @@ Matcher::Matcher(Database& src_db, HashDatabase& src_hash,
       bkp_db_(bkp_db), bkp_hash_(bkp_hash),
       src_root_(src_root), bkp_root_(bkp_root) {}
 
+Matcher::DirCache& Matcher::get_dir_cache(Database& db) {
+    return (&db == &src_db_) ? src_dir_cache_ : bkp_dir_cache_;
+}
+
 std::string Matcher::build_path(Database& db, uint64_t dir_inode,
                                 const std::string& name, const std::string& root) {
     // Build path from dir_inode upward using cached dir info
     std::vector<std::string> parts;
     parts.push_back(name);
 
+    auto& cache = get_dir_cache(db);
+
     uint64_t cur = dir_inode;
     while (cur != 0) {
-        auto it_name = dir_name_cache_.find(cur);
-        auto it_parent = dir_parent_cache_.find(cur);
+        auto it_name = cache.name.find(cur);
+        auto it_parent = cache.parent.find(cur);
 
-        if (it_name == dir_name_cache_.end() || it_parent == dir_parent_cache_.end()) {
+        if (it_name == cache.name.end() || it_parent == cache.parent.end()) {
             // Query from DB
             sqlite3_stmt* stmt = nullptr;
             const char* sql = "SELECT parent_inode, name FROM dirs WHERE inode = ?";
@@ -42,14 +48,14 @@ std::string Matcher::build_path(Database& db, uint64_t dir_inode,
                                           ? 0
                                           : static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
                     const char* n = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-                    dir_parent_cache_[cur] = parent;
-                    dir_name_cache_[cur] = n ? n : "";
-                    it_name = dir_name_cache_.find(cur);
-                    it_parent = dir_parent_cache_.find(cur);
+                    cache.parent[cur] = parent;
+                    cache.name[cur] = n ? n : "";
+                    it_name = cache.name.find(cur);
+                    it_parent = cache.parent.find(cur);
                 }
                 sqlite3_finalize(stmt);
             }
-            if (it_name == dir_name_cache_.end()) {
+            if (it_name == cache.name.end()) {
                 break; // shouldn't happen
             }
         }
@@ -100,6 +106,7 @@ void Matcher::compute_head_hashes(Database& db, HashDatabase& hash_db,
         uint8_t hash[BLAKE3_HASH_LEN];
         blake3_hasher_finalize(&hasher, hash, BLAKE3_HASH_LEN);
         hash_db.set_head_hash(f.inode, hash, BLAKE3_HASH_LEN);
+        head_hashes_computed_++;
     }
 }
 
@@ -132,6 +139,7 @@ void Matcher::compute_full_hashes(Database& db, HashDatabase& hash_db,
         uint8_t hash[BLAKE3_HASH_LEN];
         blake3_hasher_finalize(&hasher, hash, BLAKE3_HASH_LEN);
         hash_db.set_full_hash(f.inode, hash, BLAKE3_HASH_LEN);
+        full_hashes_computed_++;
     }
 }
 
@@ -147,8 +155,8 @@ bool Matcher::run() {
                                       ? 0
                                       : static_cast<uint64_t>(sqlite3_column_int64(stmt, 1));
                 const char* name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
-                dir_name_cache_[inode] = name ? name : "";
-                dir_parent_cache_[inode] = parent;
+                src_dir_cache_.name[inode] = name ? name : "";
+                src_dir_cache_.parent[inode] = parent;
             }
             sqlite3_finalize(stmt);
         }
@@ -163,8 +171,8 @@ bool Matcher::run() {
                                       ? 0
                                       : static_cast<uint64_t>(sqlite3_column_int64(stmt, 1));
                 const char* name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
-                dir_name_cache_[inode] = name ? name : "";
-                dir_parent_cache_[inode] = parent;
+                bkp_dir_cache_.name[inode] = name ? name : "";
+                bkp_dir_cache_.parent[inode] = parent;
             }
             sqlite3_finalize(stmt);
         }
@@ -277,15 +285,18 @@ bool Matcher::run() {
         clusters_processed_++;
         files_checked_ += src_files.size();
 
-        if ((idx + 1) % 100 == 0 || idx + 1 == sizes.size()) {
-            std::cout << "\rProcessed " << (idx + 1) << "/" << sizes.size()
-                      << " clusters, " << files_covered_ << " files covered"
-                      << std::flush;
-        }
+        std::cout << "\rCluster " << (idx + 1) << "/" << sizes.size()
+                  << " (size=" << size << ")"
+                  << "  head=" << head_hashes_computed_
+                  << " full=" << full_hashes_computed_
+                  << " covered=" << files_covered_
+                  << std::flush;
     }
 
     std::cout << "\nDone. " << clusters_processed_ << " clusters matched, "
-              << files_covered_ << " source files covered.\n";
+              << files_covered_ << " source files covered.\n"
+              << "  head hashes computed: " << head_hashes_computed_ << "\n"
+              << "  full hashes computed: " << full_hashes_computed_ << "\n";
     return true;
 }
 
