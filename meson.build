@@ -11,7 +11,7 @@ sources = files(
     'src/scanner.cpp'
 )
 
-executable('covered_scan', sources,
+executable('covered_scan_size', sources,
     dependencies : [sqlite3_dep],
     install : true
 )
