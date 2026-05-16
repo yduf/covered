@@ -21,6 +21,7 @@ struct FileEntry {
     uint64_t inode;
     int64_t  size;
     int64_t  mtime;  // seconds since epoch
+    int      covered; // used for reporting at the end
 };
 
 class Database {

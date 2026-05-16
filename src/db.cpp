@@ -53,6 +53,7 @@ Database::Database(const std::string& path) {
             inode      INTEGER NOT NULL,
             size       INTEGER NOT NULL,
             mtime      INTEGER NOT NULL,
+            covered    INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (dir_inode, name)
         ) WITHOUT ROWID;
 
@@ -76,7 +77,7 @@ Database::Database(const std::string& path) {
         return;
     }
 
-    const char* sql_file = "INSERT INTO files (dir_inode, name, inode, size, mtime) VALUES (?, ?, ?, ?, ?)";
+    const char* sql_file = "INSERT INTO files (dir_inode, name, inode, size, mtime, covered) VALUES (?, ?, ?, ?, ?, ?)";
     rc = sqlite3_prepare_v2(db_, sql_file, -1, &stmt_file_, nullptr);
     if (rc != SQLITE_OK) {
         error_ = true;
@@ -160,6 +161,7 @@ void Database::flush_files() {
         sqlite3_bind_int64(stmt_file_, 3, static_cast<sqlite3_int64>(f.inode));
         sqlite3_bind_int64(stmt_file_, 4, static_cast<sqlite3_int64>(f.size));
         sqlite3_bind_int64(stmt_file_, 5, static_cast<sqlite3_int64>(f.mtime));
+        sqlite3_bind_int(stmt_file_, 6, f.covered);
         int rc = sqlite3_step(stmt_file_);
         if (rc != SQLITE_DONE) {
             error_ = true;
