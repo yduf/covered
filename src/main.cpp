@@ -11,7 +11,7 @@
 #include "db.hpp"
 #include "scanner.hpp"
 
-static std::string make_db_name(const std::string& path) {
+static std::string make_db_folder(const std::string& path) {
     std::string sanitized = path;
     // Remove trailing slashes
     while (!sanitized.empty() && sanitized.back() == '/') {
@@ -30,16 +30,29 @@ static std::string make_db_name(const std::string& path) {
     if (sanitized.empty()) {
         sanitized = "root";
     }
-    return "covered_" + sanitized + ".db";
+    return "covered_" + sanitized;
 }
 
 int main(int argc, char* argv[]) {
-    if (argc != 2) {
-        std::cerr << "Usage: " << argv[0] << " <folder>\n";
-        return 1;
+    bool force = false;
+    std::string folder;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "-f" || arg == "--force") {
+            force = true;
+        } else if (folder.empty()) {
+            folder = arg;
+        } else {
+            std::cerr << "Usage: " << argv[0] << " [-f|--force] <folder>\n";
+            return 1;
+        }
     }
 
-    std::string folder = argv[1];
+    if (folder.empty()) {
+        std::cerr << "Usage: " << argv[0] << " [-f|--force] <folder>\n";
+        return 1;
+    }
 
     // Verify target is a directory
     struct stat st;
@@ -52,12 +65,23 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::string db_name = make_db_name(folder);
+    std::string db_folder = make_db_folder(folder);
+    std::string db_name = db_folder + "/filesize.db";
 
-    // Abort if DB already exists
+    // Create output folder if needed
+    if (!std::filesystem::exists(db_folder)) {
+        std::filesystem::create_directories(db_folder);
+    }
+
+    // Handle existing DB
     if (std::filesystem::exists(db_name)) {
-        std::cerr << "Error: database '" << db_name << "' already exists.\n";
-        return 1;
+        if (!force) {
+            std::cerr << "Error: database '" << db_name << "' already exists. Use -f to overwrite.\n";
+            return 1;
+        }
+        std::filesystem::remove(db_name);
+        std::filesystem::remove(db_name + "-shm");
+        std::filesystem::remove(db_name + "-wal");
     }
 
     covered::Database db(db_name);
@@ -88,7 +112,11 @@ int main(int argc, char* argv[]) {
         std::cout << "\n";
     }
     std::cout << "Scanned " << scanner.dirs_seen() << " directories and "
-              << scanner.files_seen() << " files into " << db_name << "\n";
+              << scanner.files_seen() << " files into " << db_name;
+    if (scanner.skipped() > 0) {
+        std::cout << " (" << scanner.skipped() << " skipped)";
+    }
+    std::cout << "\n";
 
     return 0;
 }
