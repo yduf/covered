@@ -33,8 +33,15 @@ covered_match_exe = executable('covered_match', match_sources,
 )
 
 test_script = find_program('test_match.sh')
+test_script_spaces = find_program('test_match_spaces.sh')
 
 test('match_end_to_end', test_script,
+    depends : [covered_scan_size_exe, covered_match_exe],
+    workdir : meson.current_source_dir(),
+    timeout : 60
+)
+
+test('match_end_to_end_spaces', test_script_spaces,
     depends : [covered_scan_size_exe, covered_match_exe],
     workdir : meson.current_source_dir(),
     timeout : 60
