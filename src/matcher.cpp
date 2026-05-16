@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cerrno>
+#include <chrono>
 
 #include "blake3.h"
 
@@ -184,7 +185,13 @@ bool Matcher::run() {
         return true;
     }
 
+    total_src_files_ = src_db_.count_files();
+
     std::cout << "Matching " << sizes.size() << " size clusters...\n";
+
+    using namespace std::chrono;
+    auto last_print = steady_clock::now();
+    const auto print_interval = std::chrono::seconds(2);
 
     for (size_t idx = 0; idx < sizes.size(); ++idx) {
         int64_t size = sizes[idx];
@@ -285,12 +292,18 @@ bool Matcher::run() {
         clusters_processed_++;
         files_checked_ += src_files.size();
 
-        std::cout << "\rCluster " << (idx + 1) << "/" << sizes.size()
-                  << " (size=" << size << ")"
-                  << "  head=" << head_hashes_computed_
-                  << " full=" << full_hashes_computed_
-                  << " covered=" << files_covered_
-                  << std::flush;
+        auto now = steady_clock::now();
+        bool is_last = (idx + 1 == sizes.size());
+        if (is_last || now - last_print >= print_interval) {
+            std::cout << "\rCluster " << (idx + 1) << "/" << sizes.size()
+                      << " (size=" << size << ", n=" << src_files.size() << ")"
+                      << "  files=" << files_checked_ << "/" << total_src_files_
+                      << "  head=" << head_hashes_computed_
+                      << " full=" << full_hashes_computed_
+                      << " covered=" << files_covered_
+                      << std::flush;
+            last_print = now;
+        }
     }
 
     std::cout << "\nDone. " << clusters_processed_ << " clusters matched, "

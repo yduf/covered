@@ -47,6 +47,7 @@ public:
     // Match-phase helpers
     std::vector<int64_t> get_distinct_sizes();
     std::vector<FileEntry> get_files_by_size(int64_t size);
+    uint64_t count_files();
     void set_covered(uint64_t inode, int covered);
 
     bool has_error() const { return error_; }
