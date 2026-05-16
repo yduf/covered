@@ -104,6 +104,81 @@ void Database::set_device(uint64_t device) {
     }
 }
 
+void Database::set_root_path(const std::string& path) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "INSERT INTO meta (key, value) VALUES ('root_path', ?)";
+    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    if (rc == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, path.c_str(), static_cast<int>(path.size()), SQLITE_STATIC);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
+}
+
+std::optional<std::string> Database::get_root_path() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT value FROM meta WHERE key = 'root_path'";
+    std::optional<std::string> result;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char* text = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            if (text) result = std::string(text);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return result;
+}
+
+std::vector<int64_t> Database::get_distinct_sizes() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<int64_t> sizes;
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT DISTINCT size FROM files WHERE size > 0 ORDER BY size";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            sizes.push_back(sqlite3_column_int64(stmt, 0));
+        }
+        sqlite3_finalize(stmt);
+    }
+    return sizes;
+}
+
+std::vector<FileEntry> Database::get_files_by_size(int64_t size) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<FileEntry> files;
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT dir_inode, name, inode, size, mtime, covered FROM files WHERE size = ?";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, size);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            files.push_back({
+                static_cast<uint64_t>(sqlite3_column_int64(stmt, 0)),
+                reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)),
+                static_cast<uint64_t>(sqlite3_column_int64(stmt, 2)),
+                sqlite3_column_int64(stmt, 3),
+                sqlite3_column_int64(stmt, 4),
+                sqlite3_column_int(stmt, 5)
+            });
+        }
+        sqlite3_finalize(stmt);
+    }
+    return files;
+}
+
+void Database::set_covered(uint64_t inode, int covered) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "UPDATE files SET covered = ? WHERE inode = ?";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, covered);
+        sqlite3_bind_int64(stmt, 2, static_cast<sqlite3_int64>(inode));
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
+}
+
 void Database::begin_batch() {
     std::lock_guard<std::mutex> lock(mutex_);
     exec_sql(db_, "BEGIN IMMEDIATE;");
@@ -170,6 +245,118 @@ void Database::flush_files() {
         }
     }
     file_buffer_.clear();
+}
+
+// ------------------------------------------------------------------
+// HashDatabase implementation
+// ------------------------------------------------------------------
+
+HashDatabase::HashDatabase(const std::string& path) {
+    int rc = sqlite3_open(path.c_str(), &db_);
+    if (rc != SQLITE_OK) {
+        error_ = true;
+        error_msg_ = sqlite3_errmsg(db_);
+        sqlite3_close(db_);
+        db_ = nullptr;
+        return;
+    }
+
+    exec_sql(db_, "PRAGMA journal_mode=WAL;");
+    exec_sql(db_, "PRAGMA synchronous=NORMAL;");
+
+    const char* schema = R"(
+        CREATE TABLE IF NOT EXISTS hashes (
+            inode     INTEGER PRIMARY KEY,
+            head_hash BLOB,
+            full_hash BLOB
+        ) WITHOUT ROWID;
+    )";
+    rc = exec_sql(db_, schema);
+    if (rc != SQLITE_OK) {
+        error_ = true;
+        error_msg_ = sqlite3_errmsg(db_);
+        return;
+    }
+
+    const char* sql_head = "INSERT OR REPLACE INTO hashes (inode, head_hash) VALUES (?, ?)";
+    rc = sqlite3_prepare_v2(db_, sql_head, -1, &stmt_set_head_, nullptr);
+    if (rc != SQLITE_OK) {
+        error_ = true;
+        error_msg_ = sqlite3_errmsg(db_);
+        return;
+    }
+
+    const char* sql_full = "INSERT OR REPLACE INTO hashes (inode, full_hash) VALUES (?, ?)";
+    rc = sqlite3_prepare_v2(db_, sql_full, -1, &stmt_set_full_, nullptr);
+    if (rc != SQLITE_OK) {
+        error_ = true;
+        error_msg_ = sqlite3_errmsg(db_);
+        return;
+    }
+}
+
+HashDatabase::~HashDatabase() {
+    if (stmt_set_head_) sqlite3_finalize(stmt_set_head_);
+    if (stmt_set_full_) sqlite3_finalize(stmt_set_full_);
+    if (db_)            sqlite3_close(db_);
+}
+
+std::optional<std::vector<uint8_t>> HashDatabase::get_head_hash(uint64_t inode) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT head_hash FROM hashes WHERE inode = ?";
+    std::optional<std::vector<uint8_t>> result;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(inode));
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const void* blob = sqlite3_column_blob(stmt, 0);
+            int len = sqlite3_column_bytes(stmt, 0);
+            if (blob && len > 0) {
+                result = std::vector<uint8_t>(static_cast<const uint8_t*>(blob),
+                                              static_cast<const uint8_t*>(blob) + len);
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+    return result;
+}
+
+std::optional<std::vector<uint8_t>> HashDatabase::get_full_hash(uint64_t inode) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT full_hash FROM hashes WHERE inode = ?";
+    std::optional<std::vector<uint8_t>> result;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(inode));
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const void* blob = sqlite3_column_blob(stmt, 0);
+            int len = sqlite3_column_bytes(stmt, 0);
+            if (blob && len > 0) {
+                result = std::vector<uint8_t>(static_cast<const uint8_t*>(blob),
+                                              static_cast<const uint8_t*>(blob) + len);
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+    return result;
+}
+
+void HashDatabase::set_head_hash(uint64_t inode, const uint8_t* hash, size_t len) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!stmt_set_head_) return;
+    sqlite3_reset(stmt_set_head_);
+    sqlite3_bind_int64(stmt_set_head_, 1, static_cast<sqlite3_int64>(inode));
+    sqlite3_bind_blob(stmt_set_head_, 2, hash, static_cast<int>(len), SQLITE_STATIC);
+    sqlite3_step(stmt_set_head_);
+}
+
+void HashDatabase::set_full_hash(uint64_t inode, const uint8_t* hash, size_t len) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!stmt_set_full_) return;
+    sqlite3_reset(stmt_set_full_);
+    sqlite3_bind_int64(stmt_set_full_, 1, static_cast<sqlite3_int64>(inode));
+    sqlite3_bind_blob(stmt_set_full_, 2, hash, static_cast<int>(len), SQLITE_STATIC);
+    sqlite3_step(stmt_set_full_);
 }
 
 } // namespace covered
