@@ -1,6 +1,7 @@
 #include <iostream>
 #include <string>
 #include <filesystem>
+#include <fstream>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -91,6 +92,19 @@ int main(int argc, char* argv[]) {
     }
 
     db.set_device(static_cast<uint64_t>(st.st_dev));
+
+    // Store absolute root path for path reconstruction during match
+    std::string abs_path = std::filesystem::absolute(folder).string();
+    db.set_root_path(abs_path);
+
+    // Also write a simple config.json for easy external access
+    {
+        std::ofstream cfg(db_folder + "/config.json");
+        if (cfg) {
+            cfg << "{\"root\":\"" << abs_path << "\"}\n";
+        }
+    }
+
     db.begin_batch();
 
     covered::Scanner scanner(db, static_cast<uint64_t>(st.st_dev));
