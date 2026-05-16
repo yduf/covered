@@ -23,6 +23,7 @@ public:
     uint64_t files_checked()      const { return files_checked_; }
     uint64_t head_hashes_computed() const { return head_hashes_computed_; }
     uint64_t full_hashes_computed() const { return full_hashes_computed_; }
+    uint64_t total_src_files()      const { return total_src_files_; }
 
 private:
     struct FileInfo {
@@ -60,6 +61,7 @@ private:
     uint64_t files_checked_ = 0;
     uint64_t head_hashes_computed_ = 0;
     uint64_t full_hashes_computed_ = 0;
+    uint64_t total_src_files_ = 0;
 };
 
 } // namespace covered

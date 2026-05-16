@@ -131,6 +131,20 @@ std::optional<std::string> Database::get_root_path() {
     return result;
 }
 
+uint64_t Database::count_files() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT COUNT(*) FROM files";
+    uint64_t count = 0;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            count = static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
+        }
+        sqlite3_finalize(stmt);
+    }
+    return count;
+}
+
 std::vector<int64_t> Database::get_distinct_sizes() {
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<int64_t> sizes;
