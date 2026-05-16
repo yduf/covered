@@ -99,7 +99,8 @@ bool Scanner::scan_dir(int dir_fd, uint64_t dir_inode, const std::string& path) 
                 entry->d_name,
                 static_cast<uint64_t>(st.st_ino),
                 static_cast<int64_t>(st.st_size),
-                static_cast<int64_t>(st.st_mtime)
+                static_cast<int64_t>(st.st_mtime),
+                0  // covered = 0 initially
             });
             auto count = ++files_seen_;
             if (count % 10000 == 0) {
