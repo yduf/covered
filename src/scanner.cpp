@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <iostream>
+#include <cerrno>
 
 namespace covered {
 
@@ -62,8 +63,16 @@ bool Scanner::scan_dir(int dir_fd, uint64_t dir_inode, const std::string& path) 
             continue;
         }
 
+        std::string sub_path = path;
+        if (!sub_path.empty() && sub_path.back() != '/') {
+            sub_path += '/';
+        }
+        sub_path += entry->d_name;
+
         struct stat st;
         if (fstatat(dir_fd, entry->d_name, &st, AT_SYMLINK_NOFOLLOW) < 0) {
+            std::cout << "\n" << std::flush;
+            std::cerr << "Warning: cannot stat '" << sub_path << "': " << std::strerror(errno) << "\n";
             continue;
         }
 
@@ -72,15 +81,11 @@ bool Scanner::scan_dir(int dir_fd, uint64_t dir_inode, const std::string& path) 
             continue;
         }
 
-        std::string sub_path = path;
-        if (!sub_path.empty() && sub_path.back() != '/') {
-            sub_path += '/';
-        }
-        sub_path += entry->d_name;
-
         if (S_ISDIR(st.st_mode)) {
             int sub_fd = openat(dir_fd, entry->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
             if (sub_fd < 0) {
+                std::cout << "\n" << std::flush;
+                std::cerr << "Warning: cannot open directory '" << sub_path << "': " << std::strerror(errno) << "\n";
                 continue;
             }
 
