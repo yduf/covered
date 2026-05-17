@@ -103,14 +103,16 @@ compute_dir_covered(covered::Database& db,
             if (f.covered) ++cov;
         }
 
-        // Aggregate children dirs
+        // Aggregate children dirs (Empty children are skipped – they don't contribute)
         auto cit = children.find(inode);
         if (cit != children.end()) {
             for (uint64_t child_inode : cit->second) {
                 auto rit = result.find(child_inode);
                 if (rit != result.end()) {
                     int child_state = rit->second;
-                    if (child_state == static_cast<int>(covered::CoveredState::Covered)) {
+                    if (child_state == static_cast<int>(covered::CoveredState::Empty)) {
+                        // Empty child: skip – does not affect parent coverage
+                    } else if (child_state == static_cast<int>(covered::CoveredState::Covered)) {
                         // Fully covered child: one virtual covered item
                         ++total;
                         ++cov;
@@ -129,7 +131,7 @@ compute_dir_covered(covered::Database& db,
 
         int state;
         if (total == 0) {
-            state = static_cast<int>(covered::CoveredState::Covered); // empty dir = covered
+            state = static_cast<int>(covered::CoveredState::Empty); // no files anywhere → empty
         } else if (cov == 0) {
             state = static_cast<int>(covered::CoveredState::Uncovered);
         } else if (cov >= total) {
@@ -221,14 +223,16 @@ int main(int argc, char* argv[])
     }
     uint64_t uncovered_files = total_files - covered_files;
 
-    uint64_t total_dirs    = dirs.size();
-    uint64_t covered_dirs  = 0;
-    uint64_t partial_dirs  = 0;
+    uint64_t total_dirs     = dirs.size();
+    uint64_t covered_dirs   = 0;
+    uint64_t partial_dirs   = 0;
     uint64_t uncovered_dirs = 0;
+    uint64_t empty_dirs     = 0;
     for (const auto& [inode, state] : dir_covered) {
-        if (state == static_cast<int>(covered::CoveredState::Covered))   ++covered_dirs;
-        else if (state == static_cast<int>(covered::CoveredState::Partial))  ++partial_dirs;
-        else ++uncovered_dirs;
+        if      (state == static_cast<int>(covered::CoveredState::Covered))   ++covered_dirs;
+        else if (state == static_cast<int>(covered::CoveredState::Partial))   ++partial_dirs;
+        else if (state == static_cast<int>(covered::CoveredState::Empty))     ++empty_dirs;
+        else                                                                   ++uncovered_dirs;
     }
 
     std::cout << "Source: " << root_path << "\n";
@@ -238,7 +242,8 @@ int main(int argc, char* argv[])
     std::cout << "Dirs    : " << total_dirs
               << "  covered=" << covered_dirs
               << "  partial=" << partial_dirs
-              << "  uncovered=" << uncovered_dirs << "\n";
+              << "  uncovered=" << uncovered_dirs
+              << "  empty=" << empty_dirs << "\n";
 
     // Step 6: optional report of uncovered files
     if (do_report && uncovered_files > 0) {

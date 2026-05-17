@@ -54,6 +54,7 @@ static const char* state_str(int state)
     switch (state) {
     case static_cast<int>(covered::CoveredState::Covered):   return "covered";
     case static_cast<int>(covered::CoveredState::Partial):   return "partial";
+    case static_cast<int>(covered::CoveredState::Empty):     return "empty";
     default:                                                  return "uncovered";
     }
 }
@@ -102,7 +103,9 @@ compute_dir_covered(covered::Database& db,
                 auto rit = result.find(ch);
                 if (rit != result.end()) {
                     int cs = rit->second;
-                    if (cs == static_cast<int>(covered::CoveredState::Covered))
+                    if (cs == static_cast<int>(covered::CoveredState::Empty)) {
+                        // Empty child: skip – does not affect parent coverage
+                    } else if (cs == static_cast<int>(covered::CoveredState::Covered))
                     { ++total; ++cov; }
                     else if (cs == static_cast<int>(covered::CoveredState::Partial))
                     { total += 2; cov += 1; }
@@ -113,7 +116,7 @@ compute_dir_covered(covered::Database& db,
         }
 
         int state;
-        if (total == 0)      state = static_cast<int>(covered::CoveredState::Covered);
+        if (total == 0)      state = static_cast<int>(covered::CoveredState::Empty);
         else if (cov == 0)   state = static_cast<int>(covered::CoveredState::Uncovered);
         else if (cov >= total) state = static_cast<int>(covered::CoveredState::Covered);
         else                 state = static_cast<int>(covered::CoveredState::Partial);

@@ -83,12 +83,14 @@ The report is done with 2 components.
   For Folder
     - covered (all files in folder are covered)
     - uncovered (no file in this folder are covered)
-    - partial (some files in folder are covered but not all) 
+    - partial (some files in folder are covered but not all)
+    - empty (folder contains no files at all, recursively)
 
 - A Nemo extension that take into account the xattr from the fuse filesystem and
   - display in green files and folder if they are covered
   - in red files and folder when they are not covered
-  - in orange folder when they are partially covered.  
+  - in orange folder when they are partially covered
+  - no emblem on empty folders
 
 # Isolation
 
@@ -142,7 +144,7 @@ Output example:
 ```
 Source: /media/yves/Big/
 Files   : 13146  covered=267  uncovered=12879
-Dirs    : 1870   covered=118  partial=60  uncovered=1692
+Dirs    : 1870   covered=118  partial=60  uncovered=1692  empty=42
 ```
 
 ## `cover_fuse`
@@ -157,6 +159,7 @@ Every file and directory exposes a `user.covered` extended attribute:
 | dir  | `covered` | all files under this dir are covered |
 | dir  | `partial` | some files are covered, some are not |
 | dir  | `uncovered` | no file under this dir is covered |
+| dir  | `empty` | dir (and all sub-dirs) contain no files at all |
 
 ```
 cover_fuse <source_folder> <mount_point> [fuse options]
@@ -176,9 +179,10 @@ from the FUSE-mounted filesystem and decorates files/folders with emblems:
 
 | xattr value | Emblem | Color |
 |---|---|---|
-| `covered`   | `emblem-default`   | green  |
-| `uncovered` | `emblem-important` | red    |
-| `partial`   | `emblem-new`       | orange |
+| `covered`   | `emblem-default`   | green   |
+| `uncovered` | `emblem-important` | red     |
+| `partial`   | `emblem-new`       | orange  |
+| `empty`     | *(none)*           | neutral |
 
 ### Installation
 
@@ -225,7 +229,7 @@ Rows:
 | `inode` | INTEGER PRIMARY KEY | Directory inode |
 | `parent_inode` | INTEGER | Parent directory inode (`NULL` for root) |
 | `name` | TEXT | Directory basename |
-| `covered` | INTEGER DEFAULT 0 | `0`=uncovered, `1`=covered, `2`=partial — computed by `cover_report` |
+| `covered` | INTEGER DEFAULT 0 | `0`=uncovered, `1`=covered, `2`=partial, `3`=empty — computed by `cover_report` |
 
 #### `files`
 | Column | Type | Description |

@@ -20,11 +20,12 @@ from gi.repository import GObject, Nemo
 
 XATTR_NAME = b"user.covered"
 
-# Map xattr value → emblem icon name
+# Map xattr value → emblem icon name (None = no emblem added)
 EMBLEM_MAP = {
     b"covered":   "emblem-default",   # green check – theme provides this in green
     b"uncovered": "emblem-important",  # red/orange exclamation
     b"partial":   "emblem-new",        # yellow/orange star
+    b"empty":     None,                # empty dir – no emblem (visually neutral)
 }
 
 # Map xattr value → color string (for NemoInfoProvider tag color hint)

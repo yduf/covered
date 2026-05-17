@@ -11,11 +11,12 @@
 
 namespace covered {
 
-// covered value for dirs (3-state)
+// covered value for dirs (4-state)
 enum class CoveredState : int {
     Uncovered = 0,
     Covered   = 1,
     Partial   = 2,
+    Empty     = 3,  // dir (and all sub-dirs) contain no files at all
 };
 
 struct DirEntry {
