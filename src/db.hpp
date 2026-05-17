@@ -43,6 +43,7 @@ public:
     void add_dir(const DirEntry& d);
     void add_file(const FileEntry& f);
     void commit_batch();
+    void sync();
 
     // Match-phase helpers
     std::vector<int64_t> get_distinct_sizes();
@@ -90,6 +91,7 @@ public:
     void set_full_hash(uint64_t inode, const uint8_t* hash, size_t len);
 
     void log_cluster(int64_t size, uint64_t file_count, bool matched, uint64_t covered_count);
+    void sync();
 
     bool has_error() const { return error_; }
     const std::string& error_msg() const { return error_msg_; }

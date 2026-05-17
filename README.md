@@ -14,6 +14,12 @@ For every file covered can also:
 For source and backup, 
 build a database of files
 
+first run to scan them 
+- scan source `./build/covered_scan_size /media/yves/Big`
+- scan backup `./build/covered_scan_size /nfs/tronaut/mnt_Backup`
+
+then run to match them ` ./build/covered_match covered_media_yves_Big/ covered_nfs_tronaut_mnt_Backup/`
+
 ## DB
 
 There is 2 kind of usage

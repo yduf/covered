@@ -7,6 +7,8 @@
 #include <cerrno>
 #include <chrono>
 #include <iomanip>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 #include "blake3.h"
 
@@ -109,6 +111,17 @@ void Matcher::compute_head_hashes(Database& db, HashDatabase& hash_db,
         }
 
         if (!cached) {
+            struct stat st;
+            if (stat(path.c_str(), &st) < 0) {
+                std::cerr << "Warning: cannot stat " << db_type << " '" << path << "': " << std::strerror(errno) << "\n";
+                continue;
+            }
+            if (static_cast<uint64_t>(st.st_ino) != f.inode) {
+                std::cerr << "Warning: inode mismatch for " << db_type << " '" << path
+                          << "': expected " << f.inode << ", got " << st.st_ino << "\n";
+                continue;
+            }
+
             std::ifstream file(path, std::ios::binary);
             if (!file) {
                 std::cerr << "Warning: cannot open " << db_type << " '" << path << "': " << std::strerror(errno) << "\n";
@@ -168,6 +181,17 @@ void Matcher::compute_full_hashes(Database& db, HashDatabase& hash_db,
         }
 
         if (!cached) {
+            struct stat st;
+            if (stat(path.c_str(), &st) < 0) {
+                std::cerr << "Warning: cannot stat '" << path << "': " << std::strerror(errno) << "\n";
+                continue;
+            }
+            if (static_cast<uint64_t>(st.st_ino) != f.inode) {
+                std::cerr << "Warning: inode mismatch for '" << path
+                          << "': expected " << f.inode << ", got " << st.st_ino << "\n";
+                continue;
+            }
+
             std::ifstream file(path, std::ios::binary);
             if (!file) {
                 std::cerr << "Warning: cannot open '" << path << "': " << std::strerror(errno) << "\n";
@@ -389,6 +413,12 @@ bool Matcher::run() {
         clusters_processed_++;
         files_checked_ += src_files.size();
         src_hash_.log_cluster(size, src_files.size(), true, covered_in_cluster);
+
+        // Sync DBs after each bucket so computed hashes are saved even if interrupted
+        src_db_.sync();
+        src_hash_.sync();
+        bkp_db_.sync();
+        bkp_hash_.sync();
 
         auto now = steady_clock::now();
         bool is_last = (idx + 1 == sizes.size());
