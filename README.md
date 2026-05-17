@@ -73,6 +73,21 @@ for each full hash computed in source
 For file in source DB
 report file for which covered flag is null
 
+The report is done with 2 components.
+- A FUSE filesystem that show the arboresence contained in src db, and expose for directory & file a custome attribute xattr: user.covered, which can take 3 states:
+  For files
+    - covered (file has been found in backup)
+    - uncovered (file has not been found)
+  For Folder
+    - covered (all files in folder are covered)
+    - uncovered (no file in this folder are covered)
+    - partial (some files in folder are covered but not all) 
+
+- A Nemo extension that take into account the xattr from the fuse filesystem and
+  - display in green files and folder if they are covered
+  - in red files and folder when they are not covered
+  - in orange folder when they are partially covered.  
+
 # Isolation
 
 - preparing the initial db that contains file size is one process
