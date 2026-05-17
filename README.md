@@ -5,11 +5,12 @@ A Tool to check if I have a backup of my file somewhere.
 Compare content of source & backup
 and list file in source that do not exist anywhere on backup.
 
-For every file covered can also:
-- highlight place where it exist on backup
-- highlight duplicates on sources
+Comes with a [Nemo]() extension so it's easy to have a visual cue of what is _covered_ or not, and it can be used to directly access (for copying) the missing parts.
 
-# Principle
+![nemo](/doc/nemo-extension.png)
+
+
+## Principle
 
 For source and backup, 
 build a database of files
@@ -22,7 +23,7 @@ then run to match them ` ./build/covered_match covered_media_yves_Big/ covered_n
 
 then run to report `./build/cover_report covered_media_yves_Big/`
 
-## DB
+### DB
 
 There is 2 kind of usage
 
@@ -35,13 +36,13 @@ hash in DB is blake3 function, stored in a BLOB.
 
 ## Filtering Phase
 
-## File Size retrieval
+### File Size retrieval
 
 We want to build a full picture of source & backup content,
 that at least give for each file its size:
 Because in second step we will cluster all files by their size, so we only have to mach each source cluster to backup cluster of the exact same size.
 
-## Match
+### Match
 
 In second step,
 we retrieve file cluster on source db and backup db, and process them, trying to match all files belonging to cluster of exact same size.
@@ -96,7 +97,7 @@ The report is done with 2 components.
     - orange folder + orange emblem if partially covered
     - cyan folder (no emblem) if empty (no files at all)
 
-# Isolation
+## Isolation
 
 - preparing the initial db that contains file size is one process
 - clustering by size is an other process
@@ -196,7 +197,7 @@ mechanism used by `nemo-folder-color-switcher`.
 If the active theme has no colour variants (no entry in colors.d), only
 emblems are shown; the folder icon falls back to the theme default.
 
-### Installation
+# Installation
 
 ```sh
 sudo cp nemo-extension/nemo-covered.py /usr/share/nemo-python/extensions/
