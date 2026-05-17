@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cerrno>
 #include <chrono>
+#include <iomanip>
 
 #include "blake3.h"
 
@@ -16,13 +17,25 @@ static constexpr size_t BLAKE3_HASH_LEN = BLAKE3_OUT_LEN; // 32 bytes
 
 Matcher::Matcher(Database& src_db, HashDatabase& src_hash,
                  Database& bkp_db, HashDatabase& bkp_hash,
-                 const std::string& src_root, const std::string& bkp_root)
+                 const std::string& src_root, const std::string& bkp_root,
+                 bool debug)
     : src_db_(src_db), src_hash_(src_hash),
       bkp_db_(bkp_db), bkp_hash_(bkp_hash),
-      src_root_(src_root), bkp_root_(bkp_root) {}
+      src_root_(src_root), bkp_root_(bkp_root), debug_(debug) {}
 
 Matcher::DirCache& Matcher::get_dir_cache(Database& db) {
     return (&db == &src_db_) ? src_dir_cache_ : bkp_dir_cache_;
+}
+
+std::string Matcher::hash_to_hex(const uint8_t* hash, size_t len) {
+    static const char hex[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(len * 2);
+    for (size_t i = 0; i < len; ++i) {
+        out.push_back(hex[hash[i] >> 4]);
+        out.push_back(hex[hash[i] & 0x0f]);
+    }
+    return out;
 }
 
 std::string Matcher::build_path(Database& db, uint64_t dir_inode,
@@ -83,31 +96,62 @@ std::string Matcher::build_path(Database& db, uint64_t dir_inode,
 
 void Matcher::compute_head_hashes(Database& db, HashDatabase& hash_db,
                                   const std::vector<FileInfo>& files,
-                                  const std::string& root) {
+                                  const std::string& root,
+                                  const std::string& db_type
+                                ) {
     for (const auto& f : files) {
+        auto t0 = std::chrono::steady_clock::now();
         auto existing = hash_db.get_head_hash(f.inode);
-        if (existing.has_value()) continue;
-
-        std::string path = build_path(db, f.dir_inode, f.name, root);
-        std::ifstream file(path, std::ios::binary);
-        if (!file) {
-            std::cerr << "Warning: cannot open '" << path << "': " << std::strerror(errno) << "\n";
-            continue;
+        bool cached = existing.has_value();
+        std::string path;
+        if (debug_ || !cached) {
+            path = build_path(db, f.dir_inode, f.name, root);
         }
 
-        char buffer[HEAD_SIZE];
-        file.read(buffer, HEAD_SIZE);
-        auto bytes_read = static_cast<size_t>(file.gcount());
-        if (bytes_read == 0) continue;
+        if (!cached) {
+            std::ifstream file(path, std::ios::binary);
+            if (!file) {
+                std::cerr << "Warning: cannot open " << db_type << " '" << path << "': " << std::strerror(errno) << "\n";
+                continue;
+            }
 
-        blake3_hasher hasher;
-        blake3_hasher_init(&hasher);
-        blake3_hasher_update(&hasher, buffer, bytes_read);
+            char buffer[HEAD_SIZE];
+            file.read(buffer, HEAD_SIZE);
+            auto bytes_read = static_cast<size_t>(file.gcount());
+            if (bytes_read == 0) {
+                if (debug_) {
+                    auto t1 = std::chrono::steady_clock::now();
+                    auto dur = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+                    std::cout << "[DEBUG] head_hash " << path
+                              << " size=" << f.size
+                              << " hash=(empty)"
+                              << " computed"
+                              << " time=" << dur << "us\n";
+                }
+                continue;
+            }
 
-        uint8_t hash[BLAKE3_HASH_LEN];
-        blake3_hasher_finalize(&hasher, hash, BLAKE3_HASH_LEN);
-        hash_db.set_head_hash(f.inode, hash, BLAKE3_HASH_LEN);
-        head_hashes_computed_++;
+            blake3_hasher hasher;
+            blake3_hasher_init(&hasher);
+            blake3_hasher_update(&hasher, buffer, bytes_read);
+
+            uint8_t hash[BLAKE3_HASH_LEN];
+            blake3_hasher_finalize(&hasher, hash, BLAKE3_HASH_LEN);
+            hash_db.set_head_hash(f.inode, hash, BLAKE3_HASH_LEN);
+            head_hashes_computed_++;
+            existing = std::vector<uint8_t>( std::begin(hash), std::end(hash));
+        }
+
+        if (debug_) {
+            auto s_cached = cached ? "cached" : "computed";
+            auto t1 = std::chrono::steady_clock::now();
+            auto dur = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+            std::cout << "[DEBUG] #" <<  f.size << " " 
+                        << "head_hash " << db_type <<  " (" << s_cached << ")="  << hash_to_hex(existing->data(), existing->size())
+                        << " '" << path << "'"
+                        << " time=" << dur << "us\n"
+                        ;
+        }
     }
 }
 
@@ -115,32 +159,58 @@ void Matcher::compute_full_hashes(Database& db, HashDatabase& hash_db,
                                   const std::vector<FileInfo>& files,
                                   const std::string& root) {
     for (const auto& f : files) {
+        auto t0 = std::chrono::steady_clock::now();
         auto existing = hash_db.get_full_hash(f.inode);
-        if (existing.has_value()) continue;
-
-        std::string path = build_path(db, f.dir_inode, f.name, root);
-        std::ifstream file(path, std::ios::binary);
-        if (!file) {
-            std::cerr << "Warning: cannot open '" << path << "': " << std::strerror(errno) << "\n";
-            continue;
+        bool cached = existing.has_value();
+        std::string path;
+        if (debug_ || !cached) {
+            path = build_path(db, f.dir_inode, f.name, root);
         }
 
-        blake3_hasher hasher;
-        blake3_hasher_init(&hasher);
+        if (!cached) {
+            std::ifstream file(path, std::ios::binary);
+            if (!file) {
+                std::cerr << "Warning: cannot open '" << path << "': " << std::strerror(errno) << "\n";
+                continue;
+            }
 
-        char buffer[65536];
-        while (file.good()) {
-            file.read(buffer, sizeof(buffer));
-            auto bytes_read = static_cast<size_t>(file.gcount());
-            if (bytes_read > 0) {
-                blake3_hasher_update(&hasher, buffer, bytes_read);
+            blake3_hasher hasher;
+            blake3_hasher_init(&hasher);
+
+            char buffer[65536];
+            while (file.good()) {
+                file.read(buffer, sizeof(buffer));
+                auto bytes_read = static_cast<size_t>(file.gcount());
+                if (bytes_read > 0) {
+                    blake3_hasher_update(&hasher, buffer, bytes_read);
+                }
+            }
+
+            uint8_t hash[BLAKE3_HASH_LEN];
+            blake3_hasher_finalize(&hasher, hash, BLAKE3_HASH_LEN);
+            hash_db.set_full_hash(f.inode, hash, BLAKE3_HASH_LEN);
+            full_hashes_computed_++;
+
+            if (debug_) {
+                auto t1 = std::chrono::steady_clock::now();
+                auto dur = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+                std::cout << "[DEBUG] full_hash " << path
+                          << " size=" << f.size
+                          << " hash=" << hash_to_hex(hash, BLAKE3_HASH_LEN)
+                          << " computed"
+                          << " time=" << dur << "us\n";
+            }
+        } else {
+            if (debug_) {
+                auto t1 = std::chrono::steady_clock::now();
+                auto dur = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+                std::cout << "[DEBUG] full_hash " << path
+                          << " size=" << f.size
+                          << " hash=" << hash_to_hex(existing->data(), existing->size())
+                          << " cached"
+                          << " time=" << dur << "us\n";
             }
         }
-
-        uint8_t hash[BLAKE3_HASH_LEN];
-        blake3_hasher_finalize(&hasher, hash, BLAKE3_HASH_LEN);
-        hash_db.set_full_hash(f.inode, hash, BLAKE3_HASH_LEN);
-        full_hashes_computed_++;
     }
 }
 
@@ -198,24 +268,35 @@ bool Matcher::run() {
 
         auto src_entries = src_db_.get_files_by_size(size);
         auto bkp_entries = bkp_db_.get_files_by_size(size);
+        bool matched = !bkp_entries.empty();
+        uint64_t covered_in_cluster = 0;
 
-        if (bkp_entries.empty()) continue;
+        if (!matched) {
+            src_hash_.log_cluster(size, src_entries.size(), false, 0);
+            continue;
+        }
+
+        if (debug_) {
+            std::cout << "[DEBUG] bucket size=" << size
+                      << " src=" << src_entries.size()
+                      << " bkp=" << bkp_entries.size() << "\n";
+        }
 
         // Convert to FileInfo
         std::vector<FileInfo> src_files;
         src_files.reserve(src_entries.size());
         for (const auto& e : src_entries) {
-            src_files.push_back({e.inode, e.dir_inode, e.name});
+            src_files.push_back({e.inode, e.dir_inode, e.name, e.size});
         }
         std::vector<FileInfo> bkp_files;
         bkp_files.reserve(bkp_entries.size());
         for (const auto& e : bkp_entries) {
-            bkp_files.push_back({e.inode, e.dir_inode, e.name});
+            bkp_files.push_back({e.inode, e.dir_inode, e.name, e.size});
         }
 
         // Step 1: compute head hashes
-        compute_head_hashes(src_db_, src_hash_, src_files, src_root_);
-        compute_head_hashes(bkp_db_, bkp_hash_, bkp_files, bkp_root_);
+        compute_head_hashes(src_db_, src_hash_, src_files, src_root_, "src");
+        compute_head_hashes(bkp_db_, bkp_hash_, bkp_files, bkp_root_, "bak");
 
         // Step 2: build hash -> inode map for source, collect backup hashes
         std::unordered_map<std::string, std::vector<uint64_t>> src_head_map;
@@ -250,7 +331,10 @@ bool Matcher::run() {
             }
         }
 
-        if (src_matched_inodes.empty()) continue;
+        if (src_matched_inodes.empty()) {
+            src_hash_.log_cluster(size, src_files.size(), true, 0);
+            continue;
+        }
 
         // Step 3: compute full hashes for matched files
         std::vector<FileInfo> src_to_full;
@@ -282,15 +366,29 @@ bool Matcher::run() {
             auto h = src_hash_.get_full_hash(inode);
             if (h.has_value()) {
                 std::string key(reinterpret_cast<const char*>(h->data()), h->size());
-                if (bkp_full_set.count(key)) {
+                bool covered = bkp_full_set.count(key) != 0;
+                if (covered) {
                     src_db_.set_covered(inode, 1);
                     files_covered_++;
+                    covered_in_cluster++;
+                }
+                if (debug_) {
+                    auto it = std::find_if(src_files.begin(), src_files.end(),
+                        [inode](const FileInfo& f){ return f.inode == inode; });
+                    if (it != src_files.end()) {
+                        std::string path = build_path(src_db_, it->dir_inode, it->name, src_root_);
+                        std::cout << "[DEBUG] coverage " << path
+                                  << " size=" << it->size
+                                  << " full_hash=" << hash_to_hex(h->data(), h->size())
+                                  << " result=" << (covered ? "covered" : "not_covered") << "\n";
+                    }
                 }
             }
         }
 
         clusters_processed_++;
         files_checked_ += src_files.size();
+        src_hash_.log_cluster(size, src_files.size(), true, covered_in_cluster);
 
         auto now = steady_clock::now();
         bool is_last = (idx + 1 == sizes.size());

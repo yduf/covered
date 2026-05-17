@@ -89,6 +89,8 @@ public:
     void set_head_hash(uint64_t inode, const uint8_t* hash, size_t len);
     void set_full_hash(uint64_t inode, const uint8_t* hash, size_t len);
 
+    void log_cluster(int64_t size, uint64_t file_count, bool matched, uint64_t covered_count);
+
     bool has_error() const { return error_; }
     const std::string& error_msg() const { return error_msg_; }
 
@@ -96,6 +98,7 @@ private:
     sqlite3* db_ = nullptr;
     sqlite3_stmt* stmt_set_head_ = nullptr;
     sqlite3_stmt* stmt_set_full_ = nullptr;
+    sqlite3_stmt* stmt_log_cluster_ = nullptr;
     bool error_ = false;
     std::string error_msg_;
     std::mutex mutex_;
