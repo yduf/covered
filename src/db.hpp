@@ -11,10 +11,18 @@
 
 namespace covered {
 
+// covered value for dirs (3-state)
+enum class CoveredState : int {
+    Uncovered = 0,
+    Covered   = 1,
+    Partial   = 2,
+};
+
 struct DirEntry {
     uint64_t inode;
     uint64_t parent_inode;  // 0 for root (no dir has inode 0)
     std::string name;
+    int covered = 0; // CoveredState, used for reporting
 };
 
 struct FileEntry {
@@ -50,6 +58,13 @@ public:
     std::vector<FileEntry> get_files_by_size(int64_t size);
     uint64_t count_files();
     void set_covered(uint64_t inode, int covered);
+
+    // Report-phase helpers
+    void migrate_dirs_covered_column();
+    std::vector<DirEntry> get_all_dirs();
+    std::vector<FileEntry> get_files_by_dir(uint64_t dir_inode);
+    std::vector<FileEntry> get_all_files();
+    void set_dir_covered(uint64_t inode, int covered);
 
     bool has_error() const { return error_; }
     const std::string& error_msg() const { return error_msg_; }
