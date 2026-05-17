@@ -86,11 +86,15 @@ The report is done with 2 components.
     - partial (some files in folder are covered but not all)
     - empty (folder contains no files at all, recursively)
 
-- A Nemo extension that take into account the xattr from the fuse filesystem and
-  - display in green files and folder if they are covered
-  - in red files and folder when they are not covered
-  - in orange folder when they are partially covered
-  - no emblem on empty folders
+- A Nemo extension that take into account the xattr from the fuse filesystem and:
+  - For **files**: adds a colour emblem
+    - green emblem if covered
+    - red emblem if uncovered
+  - For **folders**: sets a coloured folder icon (via nemo-folder-color-switcher mechanism) AND an emblem
+    - green folder + green emblem if all files are covered
+    - red folder + red emblem if no files are covered
+    - orange folder + orange emblem if partially covered
+    - cyan folder (no emblem) if empty (no files at all)
 
 # Isolation
 
@@ -175,14 +179,22 @@ fusermount3 -u /tmp/covered_mount
 ## Nemo extension (`nemo-extension/nemo-covered.py`)
 
 A Python extension for the **Nemo** file manager that reads `user.covered`
-from the FUSE-mounted filesystem and decorates files/folders with emblems:
+from the FUSE-mounted filesystem, adds emblems and sets coloured folder icons
+via the same `metadata::custom-icon` mechanism used by `nemo-folder-color-switcher`.
 
-| xattr value | Emblem | Color |
-|---|---|---|
-| `covered`   | `emblem-default`   | green   |
-| `uncovered` | `emblem-important` | red     |
-| `partial`   | `emblem-new`       | orange  |
-| `empty`     | *(none)*           | neutral |
+| xattr value | Emblem | Folder colour | Mint-X icon theme |
+|---|---|---|---|
+| `covered`   | `emblem-default` (green)   | green | `Mint-X` (default) |
+| `uncovered` | `emblem-important` (red)   | red   | `Mint-X-Red`       |
+| `partial`   | `emblem-new` (orange)      | orange| `Mint-X-Orange`    |
+| `empty`     | *(none)*                   | aqua  | `Mint-X-Aqua`      |
+
+Folder coloring reads `/usr/share/folder-color-switcher/colors.d/*.json` at
+startup to find the color-variant icon theme for the active GTK theme.
+`metadata::custom-icon` is set on the directory's GIO location — the same
+mechanism used by `nemo-folder-color-switcher`.  
+If the active theme has no colour variants (no entry in colors.d), only
+emblems are shown; the folder icon falls back to the theme default.
 
 ### Installation
 
