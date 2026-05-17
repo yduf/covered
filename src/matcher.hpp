@@ -14,7 +14,8 @@ class Matcher {
 public:
     Matcher(Database& src_db, HashDatabase& src_hash,
             Database& bkp_db, HashDatabase& bkp_hash,
-            const std::string& src_root, const std::string& bkp_root);
+            const std::string& src_root, const std::string& bkp_root,
+            bool debug = false);
 
     bool run();
 
@@ -30,12 +31,14 @@ private:
         uint64_t inode;
         uint64_t dir_inode;
         std::string name;
+        int64_t size;
     };
 
     std::string build_path(Database& db, uint64_t dir_inode, const std::string& name,
                            const std::string& root);
     void compute_head_hashes(Database& db, HashDatabase& hash_db,
-                             const std::vector<FileInfo>& files, const std::string& root);
+                             const std::vector<FileInfo>& files, const std::string& root,
+                             const std::string& db_type);
     void compute_full_hashes(Database& db, HashDatabase& hash_db,
                              const std::vector<FileInfo>& files, const std::string& root);
 
@@ -62,6 +65,9 @@ private:
     uint64_t head_hashes_computed_ = 0;
     uint64_t full_hashes_computed_ = 0;
     uint64_t total_src_files_ = 0;
+    bool debug_ = false;
+
+    static std::string hash_to_hex(const uint8_t* hash, size_t len);
 };
 
 } // namespace covered

@@ -284,6 +284,13 @@ HashDatabase::HashDatabase(const std::string& path) {
             head_hash BLOB,
             full_hash BLOB
         ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS cluster_log (
+            size          INTEGER PRIMARY KEY,
+            file_count    INTEGER NOT NULL,
+            matched       INTEGER NOT NULL,
+            covered_count INTEGER NOT NULL
+        ) WITHOUT ROWID;
     )";
     rc = exec_sql(db_, schema);
     if (rc != SQLITE_OK) {
@@ -307,11 +314,20 @@ HashDatabase::HashDatabase(const std::string& path) {
         error_msg_ = sqlite3_errmsg(db_);
         return;
     }
+
+    const char* sql_log = "INSERT OR REPLACE INTO cluster_log (size, file_count, matched, covered_count) VALUES (?, ?, ?, ?)";
+    rc = sqlite3_prepare_v2(db_, sql_log, -1, &stmt_log_cluster_, nullptr);
+    if (rc != SQLITE_OK) {
+        error_ = true;
+        error_msg_ = sqlite3_errmsg(db_);
+        return;
+    }
 }
 
 HashDatabase::~HashDatabase() {
     if (stmt_set_head_) sqlite3_finalize(stmt_set_head_);
     if (stmt_set_full_) sqlite3_finalize(stmt_set_full_);
+    if (stmt_log_cluster_) sqlite3_finalize(stmt_log_cluster_);
     if (db_)            sqlite3_close(db_);
 }
 
@@ -371,6 +387,17 @@ void HashDatabase::set_full_hash(uint64_t inode, const uint8_t* hash, size_t len
     sqlite3_bind_int64(stmt_set_full_, 1, static_cast<sqlite3_int64>(inode));
     sqlite3_bind_blob(stmt_set_full_, 2, hash, static_cast<int>(len), SQLITE_STATIC);
     sqlite3_step(stmt_set_full_);
+}
+
+void HashDatabase::log_cluster(int64_t size, uint64_t file_count, bool matched, uint64_t covered_count) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!stmt_log_cluster_) return;
+    sqlite3_reset(stmt_log_cluster_);
+    sqlite3_bind_int64(stmt_log_cluster_, 1, static_cast<sqlite3_int64>(size));
+    sqlite3_bind_int64(stmt_log_cluster_, 2, static_cast<sqlite3_int64>(file_count));
+    sqlite3_bind_int(stmt_log_cluster_, 3, matched ? 1 : 0);
+    sqlite3_bind_int64(stmt_log_cluster_, 4, static_cast<sqlite3_int64>(covered_count));
+    sqlite3_step(stmt_log_cluster_);
 }
 
 } // namespace covered

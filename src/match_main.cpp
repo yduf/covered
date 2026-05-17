@@ -26,14 +26,21 @@ static std::string read_root_from_json(const std::string& path) {
 }
 
 int main(int argc, char* argv[]) {
-    if (argc != 3) {
-        std::cerr << "Usage: " << argv[0] << " <source_folder> <backup_folder>\n"
-                  << "  e.g.: " << argv[0] << " covered_home_yves covered_mnt_backup\n";
+    bool debug = false;
+    int arg_idx = 1;
+    if (argc > 1 && std::string(argv[1]) == "-d") {
+        debug = true;
+        arg_idx = 2;
+    }
+
+    if (argc - arg_idx != 2) {
+        std::cerr << "Usage: " << argv[0] << " [-d] <source_folder> <backup_folder>\n"
+                  << "  e.g.: " << argv[0] << " -d covered_home_yves covered_mnt_backup\n";
         return 1;
     }
 
-    std::string src_folder = argv[1];
-    std::string bkp_folder = argv[2];
+    std::string src_folder = argv[arg_idx];
+    std::string bkp_folder = argv[arg_idx + 1];
 
     std::string src_db_path = src_folder + "/filesize.db";
     std::string bkp_db_path = bkp_folder + "/filesize.db";
@@ -94,7 +101,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Source root: " << src_root << "\n";
     std::cout << "Backup root: " << bkp_root << "\n";
 
-    covered::Matcher matcher(src_db, src_hash, bkp_db, bkp_hash, src_root, bkp_root);
+    covered::Matcher matcher(src_db, src_hash, bkp_db, bkp_hash, src_root, bkp_root, debug);
     bool ok = matcher.run();
 
     if (!ok) {
