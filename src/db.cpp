@@ -221,6 +221,13 @@ void Database::commit_batch() {
     exec_sql(db_, "COMMIT;");
 }
 
+void Database::sync() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (db_) {
+        sqlite3_wal_checkpoint_v2(db_, nullptr, SQLITE_CHECKPOINT_PASSIVE, nullptr, nullptr);
+    }
+}
+
 void Database::flush_dirs() {
     if (!db_ || !stmt_dir_) return;
     for (const auto& d : dir_buffer_) {
@@ -299,7 +306,7 @@ HashDatabase::HashDatabase(const std::string& path) {
         return;
     }
 
-    const char* sql_head = "INSERT OR REPLACE INTO hashes (inode, head_hash) VALUES (?, ?)";
+    const char* sql_head = "INSERT INTO hashes (inode, head_hash) VALUES (?, ?) ON CONFLICT(inode) DO UPDATE SET head_hash = excluded.head_hash";
     rc = sqlite3_prepare_v2(db_, sql_head, -1, &stmt_set_head_, nullptr);
     if (rc != SQLITE_OK) {
         error_ = true;
@@ -307,7 +314,7 @@ HashDatabase::HashDatabase(const std::string& path) {
         return;
     }
 
-    const char* sql_full = "INSERT OR REPLACE INTO hashes (inode, full_hash) VALUES (?, ?)";
+    const char* sql_full = "INSERT INTO hashes (inode, full_hash) VALUES (?, ?) ON CONFLICT(inode) DO UPDATE SET full_hash = excluded.full_hash";
     rc = sqlite3_prepare_v2(db_, sql_full, -1, &stmt_set_full_, nullptr);
     if (rc != SQLITE_OK) {
         error_ = true;
@@ -398,6 +405,13 @@ void HashDatabase::log_cluster(int64_t size, uint64_t file_count, bool matched, 
     sqlite3_bind_int(stmt_log_cluster_, 3, matched ? 1 : 0);
     sqlite3_bind_int64(stmt_log_cluster_, 4, static_cast<sqlite3_int64>(covered_count));
     sqlite3_step(stmt_log_cluster_);
+}
+
+void HashDatabase::sync() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (db_) {
+        sqlite3_wal_checkpoint_v2(db_, nullptr, SQLITE_CHECKPOINT_PASSIVE, nullptr, nullptr);
+    }
 }
 
 } // namespace covered
