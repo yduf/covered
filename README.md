@@ -20,6 +20,8 @@ first run to scan them
 
 then run to match them ` ./build/covered_match covered_media_yves_Big/ covered_nfs_tronaut_mnt_Backup/`
 
+then run to report `./build/cover_report covered_media_yves_Big/`
+
 ## DB
 
 There is 2 kind of usage
@@ -95,6 +97,98 @@ The report is done with 2 components.
   - filling hash for set of file matching size is an other process
 - report is an other process, that can be launched independantly (it just need source and backup DB)
 
+# Usage
+
+## Full workflow
+
+```sh
+# 1. Scan source and backup
+./build/covered_scan_size /media/yves/Big
+./build/covered_scan_size /nfs/tronaut/mnt_Backup
+
+# 2. Match files (computes covered flag in source DB)
+./build/covered_match covered_media_yves_Big/ covered_nfs_tronaut_mnt_Backup/
+
+# 3. Report: compute dir covered states, print summary
+./build/cover_report covered_media_yves_Big/
+
+# 3b. Report with list of uncovered files
+./build/cover_report --report covered_media_yves_Big/
+
+# 4. Mount FUSE filesystem (exposes user.covered xattr)
+mkdir -p /tmp/covered_mount
+./build/cover_fuse covered_media_yves_Big/ /tmp/covered_mount
+# Ctrl-C or: fusermount3 -u /tmp/covered_mount
+
+# 5. (optional) Check xattr from command line
+getfattr -n user.covered /tmp/covered_mount/some/file.txt
+```
+
+## `cover_report`
+
+Computes the covered status for every **directory** in the source DB by
+aggregating its files and sub-directories (bottom-up), then writes the result
+back to the `dirs.covered` column.
+
+```
+cover_report [--report|-r] <source_folder>
+```
+
+| Option | Description |
+|---|---|
+| `--report` / `-r` | Also print the full path of every uncovered file to stdout |
+
+Output example:
+```
+Source: /media/yves/Big/
+Files   : 13146  covered=267  uncovered=12879
+Dirs    : 1870   covered=118  partial=60  uncovered=1692
+```
+
+## `cover_fuse`
+
+Mounts the source arborescence as a read-only FUSE filesystem.
+Every file and directory exposes a `user.covered` extended attribute:
+
+| Node | Value | Meaning |
+|---|---|---|
+| file | `covered` | file was found in backup |
+| file | `uncovered` | file was not found in backup |
+| dir  | `covered` | all files under this dir are covered |
+| dir  | `partial` | some files are covered, some are not |
+| dir  | `uncovered` | no file under this dir is covered |
+
+```
+cover_fuse <source_folder> <mount_point> [fuse options]
+```
+
+```sh
+mkdir -p /tmp/covered_mount
+./build/cover_fuse covered_media_yves_Big/ /tmp/covered_mount
+# runs in foreground; Ctrl-C to stop, or:
+fusermount3 -u /tmp/covered_mount
+```
+
+## Nemo extension (`nemo-extension/nemo-covered.py`)
+
+A Python extension for the **Nemo** file manager that reads `user.covered`
+from the FUSE-mounted filesystem and decorates files/folders with emblems:
+
+| xattr value | Emblem | Color |
+|---|---|---|
+| `covered`   | `emblem-default`   | green  |
+| `uncovered` | `emblem-important` | red    |
+| `partial`   | `emblem-new`       | orange |
+
+### Installation
+
+```sh
+sudo cp nemo-extension/nemo-covered.py /usr/share/nemo-python/extensions/
+nemo -q && nemo
+```
+
+Then navigate to the FUSE mount point in Nemo to see the color-coded emblems.
+
 # Details
 
 ## DB
@@ -131,6 +225,7 @@ Rows:
 | `inode` | INTEGER PRIMARY KEY | Directory inode |
 | `parent_inode` | INTEGER | Parent directory inode (`NULL` for root) |
 | `name` | TEXT | Directory basename |
+| `covered` | INTEGER DEFAULT 0 | `0`=uncovered, `1`=covered, `2`=partial — computed by `cover_report` |
 
 #### `files`
 | Column | Type | Description |

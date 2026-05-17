@@ -10,6 +10,8 @@ if not blake3_dep.found()
     blake3_dep = blake3_proj.get_variable('blake3_dep')
 endif
 
+fuse3_dep = dependency('fuse3', required: false)
+
 scan_sources = files(
     'src/main.cpp',
     'src/db.cpp',
@@ -31,6 +33,30 @@ covered_match_exe = executable('covered_match', match_sources,
     dependencies : [sqlite3_dep, blake3_dep],
     install : true
 )
+
+report_sources = files(
+    'src/report_main.cpp',
+    'src/db.cpp',
+)
+
+cover_report_exe = executable('cover_report', report_sources,
+    dependencies : [sqlite3_dep],
+    install : true
+)
+
+if fuse3_dep.found()
+    fuse_sources = files(
+        'src/fuse_main.cpp',
+        'src/db.cpp',
+    )
+
+    cover_fuse_exe = executable('cover_fuse', fuse_sources,
+        dependencies : [sqlite3_dep, fuse3_dep],
+        install : true
+    )
+else
+    warning('libfuse3-dev not found – cover_fuse will not be built. Install with: sudo apt install libfuse3-dev')
+endif
 
 test_script = find_program('test_match.sh')
 test_script_spaces = find_program('test_match_spaces.sh')

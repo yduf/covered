@@ -193,6 +193,95 @@ void Database::set_covered(uint64_t inode, int covered) {
     }
 }
 
+// ------------------------------------------------------------------
+// Report-phase helpers
+// ------------------------------------------------------------------
+
+void Database::migrate_dirs_covered_column() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Ignore error – column may already exist
+    exec_sql(db_, "ALTER TABLE dirs ADD COLUMN covered INTEGER NOT NULL DEFAULT 0;");
+}
+
+std::vector<DirEntry> Database::get_all_dirs() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<DirEntry> dirs;
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT inode, parent_inode, name, covered FROM dirs";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            DirEntry d;
+            d.inode        = static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
+            // parent_inode may be NULL for root
+            if (sqlite3_column_type(stmt, 1) == SQLITE_NULL)
+                d.parent_inode = 0;
+            else
+                d.parent_inode = static_cast<uint64_t>(sqlite3_column_int64(stmt, 1));
+            const char* name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+            d.name    = name ? name : "";
+            d.covered = sqlite3_column_int(stmt, 3);
+            dirs.push_back(d);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return dirs;
+}
+
+std::vector<FileEntry> Database::get_files_by_dir(uint64_t dir_inode) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<FileEntry> files;
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT dir_inode, name, inode, size, mtime, covered FROM files WHERE dir_inode = ?";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(dir_inode));
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            files.push_back({
+                static_cast<uint64_t>(sqlite3_column_int64(stmt, 0)),
+                reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)),
+                static_cast<uint64_t>(sqlite3_column_int64(stmt, 2)),
+                sqlite3_column_int64(stmt, 3),
+                sqlite3_column_int64(stmt, 4),
+                sqlite3_column_int(stmt, 5)
+            });
+        }
+        sqlite3_finalize(stmt);
+    }
+    return files;
+}
+
+std::vector<FileEntry> Database::get_all_files() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<FileEntry> files;
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT dir_inode, name, inode, size, mtime, covered FROM files";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            files.push_back({
+                static_cast<uint64_t>(sqlite3_column_int64(stmt, 0)),
+                reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)),
+                static_cast<uint64_t>(sqlite3_column_int64(stmt, 2)),
+                sqlite3_column_int64(stmt, 3),
+                sqlite3_column_int64(stmt, 4),
+                sqlite3_column_int(stmt, 5)
+            });
+        }
+        sqlite3_finalize(stmt);
+    }
+    return files;
+}
+
+void Database::set_dir_covered(uint64_t inode, int covered) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "UPDATE dirs SET covered = ? WHERE inode = ?";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, covered);
+        sqlite3_bind_int64(stmt, 2, static_cast<sqlite3_int64>(inode));
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
+}
+
 void Database::begin_batch() {
     std::lock_guard<std::mutex> lock(mutex_);
     exec_sql(db_, "BEGIN IMMEDIATE;");
