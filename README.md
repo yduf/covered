@@ -9,19 +9,55 @@ Comes with an extension for [Nemo](https://github.com/linuxmint/nemo#nemo) (the 
 
 ![nemo](/doc/nemo-extension.png)
 
-
-## Principle
+## Usage
 
 For source and backup, 
-build a database of files
+build a database of files and compare them
 
-first run to scan them 
+first run to scan them  
 - scan source `./build/covered_scan_size /media/yves/Big`
 - scan backup `./build/covered_scan_size /nfs/tronaut/mnt_Backup`
 
-then run to match them ` ./build/covered_match covered_media_yves_Big/ covered_nfs_tronaut_mnt_Backup/`
+then run to match them:  
+`./build/covered_match covered_media_yves_Big/ covered_nfs_tronaut_mnt_Backup/`
 
-then run to report `./build/cover_report covered_media_yves_Big/`
+then run to report:   
+`./build/cover_report covered_media_yves_Big/`
+or list of uncovered files `./build/cover_report --report covered_media_yves_Big/`
+
+Easiest way is now to look at the result with Nemo: 
+install nemo extension (need only once)
+
+```sh
+sudo cp nemo-extension/nemo-covered.py /usr/share/nemo-python/extensions/
+nemo -q && nemo
+```
+
+Mount the report with FUSE:
+- `mkdir -p /tmp/covered_mount`
+- `./build/cover_fuse covered_media_yves_Big/ /tmp/covered_mount`
+- # Ctrl-C or: fusermount3 -u /tmp/covered_mount when done
+
+)
+And now in Nemo go to `/tmp/covered_mount`
+and you should see something like the screen shot above.
+
+
+You can also Check xattr user.coveredd from command line: 
+`getfattr -n user.covered /tmp/covered_mount/some/file.txt`
+
+# Install
+
+You need to compile it.
+Yet it should be fast and as simple as:
+
+```sh
+mkdir build
+meson build
+cd build && meson compile
+```
+
+# Principle
 
 ## DB
 
@@ -104,32 +140,7 @@ The report is done with 2 components.
   - filling hash for set of file matching size is an other process
 - report is an other process, that can be launched independantly (it just need source and backup DB)
 
-# Usage
-
-## Full workflow
-
-```sh
-# 1. Scan source and backup
-./build/covered_scan_size /media/yves/Big
-./build/covered_scan_size /nfs/tronaut/mnt_Backup
-
-# 2. Match files (computes covered flag in source DB)
-./build/covered_match covered_media_yves_Big/ covered_nfs_tronaut_mnt_Backup/
-
-# 3. Report: compute dir covered states, print summary
-./build/cover_report covered_media_yves_Big/
-
-# 3b. Report with list of uncovered files
-./build/cover_report --report covered_media_yves_Big/
-
-# 4. Mount FUSE filesystem (exposes user.covered xattr)
-mkdir -p /tmp/covered_mount
-./build/cover_fuse covered_media_yves_Big/ /tmp/covered_mount
-# Ctrl-C or: fusermount3 -u /tmp/covered_mount
-
-# 5. (optional) Check xattr from command line
-getfattr -n user.covered /tmp/covered_mount/some/file.txt
-```
+# CLI
 
 ## `cover_report`
 
