@@ -1,6 +1,10 @@
 #include <iostream>
 #include <string>
 #include <filesystem>
+#include <functional>
+#include <unordered_map>
+#include <vector>
+#include <algorithm>
 
 #include "db.hpp"
 
@@ -82,14 +86,16 @@ int main(int argc, char* argv[])
     }
     uint64_t uncovered_files = total_files - covered_files;
 
-    uint64_t total_dirs    = dirs.size();
-    uint64_t covered_dirs  = 0;
-    uint64_t partial_dirs  = 0;
+    uint64_t total_dirs     = dirs.size();
+    uint64_t covered_dirs   = 0;
+    uint64_t partial_dirs   = 0;
     uint64_t uncovered_dirs = 0;
+    uint64_t empty_dirs     = 0;
     for (const auto& [inode, state] : dir_covered) {
-        if (state == static_cast<int>(covered::CoveredState::Covered))   ++covered_dirs;
-        else if (state == static_cast<int>(covered::CoveredState::Partial))  ++partial_dirs;
-        else ++uncovered_dirs;
+        if      (state == static_cast<int>(covered::CoveredState::Covered))   ++covered_dirs;
+        else if (state == static_cast<int>(covered::CoveredState::Partial))   ++partial_dirs;
+        else if (state == static_cast<int>(covered::CoveredState::Empty))     ++empty_dirs;
+        else                                                                   ++uncovered_dirs;
     }
 
     std::cout << "Source: " << root_path << "\n";
@@ -99,7 +105,8 @@ int main(int argc, char* argv[])
     std::cout << "Dirs    : " << total_dirs
               << "  covered=" << covered_dirs
               << "  partial=" << partial_dirs
-              << "  uncovered=" << uncovered_dirs << "\n";
+              << "  uncovered=" << uncovered_dirs
+              << "  empty=" << empty_dirs << "\n";
 
     // Step 6: optional report of uncovered files
     if (do_report && uncovered_files > 0) {

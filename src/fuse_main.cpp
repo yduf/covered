@@ -54,6 +54,7 @@ static const char* state_str(int state)
     switch (state) {
     case static_cast<int>(covered::CoveredState::Covered):   return "covered";
     case static_cast<int>(covered::CoveredState::Partial):   return "partial";
+    case static_cast<int>(covered::CoveredState::Empty):     return "empty";
     default:                                                  return "uncovered";
     }
 }

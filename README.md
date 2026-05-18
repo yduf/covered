@@ -7,7 +7,10 @@ and list file in source that do not exist anywhere on backup.
 
 Comes with an extension for [Nemo](https://github.com/linuxmint/nemo#nemo) (the linuxmint file-manager) so it's easy to have a visual cue of what is _covered_ or not, and it can be used to directly access (for copying) the missing parts.
 
-# Principle
+![nemo](/doc/nemo-extension.png)
+
+
+## Principle
 
 For source and backup, 
 build a database of files
@@ -33,13 +36,13 @@ hash in DB is blake3 function, stored in a BLOB.
 
 ## Filtering Phase
 
-## File Size retrieval
+### File Size retrieval
 
 We want to build a full picture of source & backup content,
 that at least give for each file its size:
 Because in second step we will cluster all files by their size, so we only have to mach each source cluster to backup cluster of the exact same size.
 
-## Match
+### Match
 
 In second step,
 we retrieve file cluster on source db and backup db, and process them, trying to match all files belonging to cluster of exact same size.
@@ -81,14 +84,20 @@ The report is done with 2 components.
   For Folder
     - covered (all files in folder are covered)
     - uncovered (no file in this folder are covered)
-    - partial (some files in folder are covered but not all) 
+    - partial (some files in folder are covered but not all)
+    - empty (folder contains no files at all, recursively)
 
-- A Nemo extension that take into account the xattr from the fuse filesystem and
-  - display in green files and folder if they are covered
-  - in red files and folder when they are not covered
-  - in orange folder when they are partially covered.  
+- A Nemo extension that take into account the xattr from the fuse filesystem and:
+  - For **files**: adds a colour emblem
+    - green emblem if covered
+    - red emblem if uncovered
+  - For **folders**: sets a coloured folder icon (via nemo-folder-color-switcher mechanism) AND an emblem
+    - green folder + green emblem if all files are covered
+    - red folder + red emblem if no files are covered
+    - orange folder + orange emblem if partially covered
+    - cyan folder (no emblem) if empty (no files at all)
 
-# Isolation
+## Isolation
 
 - preparing the initial db that contains file size is one process
 - clustering by size is an other process
@@ -140,7 +149,7 @@ Output example:
 ```
 Source: /media/yves/Big/
 Files   : 13146  covered=267  uncovered=12879
-Dirs    : 1870   covered=118  partial=60  uncovered=1692
+Dirs    : 1870   covered=118  partial=60  uncovered=1692  empty=42
 ```
 
 ## `cover_fuse`
@@ -155,6 +164,7 @@ Every file and directory exposes a `user.covered` extended attribute:
 | dir  | `covered` | all files under this dir are covered |
 | dir  | `partial` | some files are covered, some are not |
 | dir  | `uncovered` | no file under this dir is covered |
+| dir  | `empty` | dir (and all sub-dirs) contain no files at all |
 
 ```
 cover_fuse <source_folder> <mount_point> [fuse options]
@@ -170,15 +180,24 @@ fusermount3 -u /tmp/covered_mount
 ## Nemo extension (`nemo-extension/nemo-covered.py`)
 
 A Python extension for the **Nemo** file manager that reads `user.covered`
-from the FUSE-mounted filesystem and decorates files/folders with emblems:
+from the FUSE-mounted filesystem, adds emblems and sets coloured folder icons
+via the same `metadata::custom-icon` mechanism used by `nemo-folder-color-switcher`.
 
-| xattr value | Emblem | Color |
-|---|---|---|
-| `covered`   | `emblem-default`   | green  |
-| `uncovered` | `emblem-important` | red    |
-| `partial`   | `emblem-new`       | orange |
+| xattr value | Emblem | Folder colour | Mint-X icon theme |
+|---|---|---|---|
+| `covered`   | `emblem-default` (green)   | green | `Mint-X` (default) |
+| `uncovered` | `emblem-important` (red)   | red   | `Mint-X-Red`       |
+| `partial`   | `emblem-new` (orange)      | orange| `Mint-X-Orange`    |
+| `empty`     | *(none)*                   | aqua  | `Mint-X-Aqua`      |
 
-### Installation
+Folder coloring reads `/usr/share/folder-color-switcher/colors.d/*.json` at
+startup to find the color-variant icon theme for the active GTK theme.
+`metadata::custom-icon` is set on the directory's GIO location — the same
+mechanism used by `nemo-folder-color-switcher`.  
+If the active theme has no colour variants (no entry in colors.d), only
+emblems are shown; the folder icon falls back to the theme default.
+
+# Installation
 
 ```sh
 sudo cp nemo-extension/nemo-covered.py /usr/share/nemo-python/extensions/
@@ -223,7 +242,7 @@ Rows:
 | `inode` | INTEGER PRIMARY KEY | Directory inode |
 | `parent_inode` | INTEGER | Parent directory inode (`NULL` for root) |
 | `name` | TEXT | Directory basename |
-| `covered` | INTEGER DEFAULT 0 | `0`=uncovered, `1`=covered, `2`=partial — computed by `cover_report` |
+| `covered` | INTEGER DEFAULT 0 | `0`=uncovered, `1`=covered, `2`=partial, `3`=empty — computed by `cover_report` |
 
 #### `files`
 | Column | Type | Description |
