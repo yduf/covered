@@ -68,6 +68,15 @@ public:
     std::vector<FileEntry> get_all_files();
     void set_dir_covered(uint64_t inode, int covered);
 
+
+    // Shared algorithm: compute covered state for all directories (bottom-up)
+    // Returns a map inode -> CoveredState
+    std::unordered_map<uint64_t, int> compute_dir_covered();
+
+    // Build a map inode -> full path from the dirs table
+    std::unordered_map<uint64_t, std::string> build_dir_paths(const std::string& root_path);
+
+
     bool has_error() const { return error_; }
     const std::string& error_msg() const { return error_msg_; }
 
