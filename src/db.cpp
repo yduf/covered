@@ -2,6 +2,8 @@
 
 #include <cstdio>
 #include <cstring>
+#include <functional>
+#include <algorithm>
 
 namespace covered {
 

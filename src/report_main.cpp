@@ -9,143 +9,6 @@
 #include "db.hpp"
 
 // -------------------------------------------------------------------
-// Path reconstruction helper
-// Build a map inode -> full path from the dirs table
-// -------------------------------------------------------------------
-static std::unordered_map<uint64_t, std::string>
-build_dir_paths(const std::vector<covered::DirEntry>& dirs, const std::string& root_path)
-{
-    // Map inode -> DirEntry for quick lookup
-    std::unordered_map<uint64_t, const covered::DirEntry*> by_inode;
-    for (const auto& d : dirs) {
-        by_inode[d.inode] = &d;
-    }
-
-    std::unordered_map<uint64_t, std::string> paths;
-
-    // Recursive lambda (iterative via memoization)
-    std::function<std::string(uint64_t)> get_path = [&](uint64_t inode) -> std::string {
-        auto it = paths.find(inode);
-        if (it != paths.end()) return it->second;
-
-        auto dit = by_inode.find(inode);
-        if (dit == by_inode.end()) return root_path; // fallback
-
-        const auto* d = dit->second;
-        if (d->parent_inode == 0) {
-            // root directory
-            paths[inode] = root_path;
-        } else {
-            paths[inode] = get_path(d->parent_inode) + "/" + d->name;
-        }
-        return paths[inode];
-    };
-
-    for (const auto& d : dirs) {
-        get_path(d.inode);
-    }
-    return paths;
-}
-
-// -------------------------------------------------------------------
-// Compute covered state for all directories (bottom-up)
-// Returns a map inode -> CoveredState (0=uncovered,1=covered,2=partial)
-// -------------------------------------------------------------------
-static std::unordered_map<uint64_t, int>
-compute_dir_covered(covered::Database& db,
-                    const std::vector<covered::DirEntry>& dirs)
-{
-    // Build children map
-    std::unordered_map<uint64_t, std::vector<uint64_t>> children; // parent_inode -> child inodes
-    uint64_t root_inode = 0;
-    for (const auto& d : dirs) {
-        if (d.parent_inode == 0) {
-            root_inode = d.inode;
-        } else {
-            children[d.parent_inode].push_back(d.inode);
-        }
-    }
-
-    std::unordered_map<uint64_t, int> result;
-
-    // Post-order DFS (iterative with explicit stack)
-    // We need to process children before parents
-    std::vector<uint64_t> order;
-    {
-        std::vector<uint64_t> stack;
-        if (root_inode != 0) stack.push_back(root_inode);
-        // Also push any dirs that might be disconnected
-        for (const auto& d : dirs) {
-            if (d.parent_inode == 0 && d.inode != root_inode) stack.push_back(d.inode);
-        }
-        while (!stack.empty()) {
-            uint64_t cur = stack.back();
-            stack.pop_back();
-            order.push_back(cur);
-            auto cit = children.find(cur);
-            if (cit != children.end()) {
-                for (auto child : cit->second) {
-                    stack.push_back(child);
-                }
-            }
-        }
-        // Process in reverse so leaves come first
-        std::reverse(order.begin(), order.end());
-    }
-
-    for (uint64_t inode : order) {
-        // Get files directly in this dir
-        auto files = db.get_files_by_dir(inode);
-
-        int total = static_cast<int>(files.size());
-        int cov   = 0;
-        for (const auto& f : files) {
-            if (f.covered) ++cov;
-        }
-
-        // Aggregate children dirs (Empty children are skipped – they don't contribute)
-        auto cit = children.find(inode);
-        if (cit != children.end()) {
-            for (uint64_t child_inode : cit->second) {
-                auto rit = result.find(child_inode);
-                if (rit != result.end()) {
-                    int child_state = rit->second;
-                    if (child_state == static_cast<int>(covered::CoveredState::Empty)) {
-                        // Empty child: skip – does not affect parent coverage
-                    } else if (child_state == static_cast<int>(covered::CoveredState::Covered)) {
-                        // Fully covered child: one virtual covered item
-                        ++total;
-                        ++cov;
-                    } else if (child_state == static_cast<int>(covered::CoveredState::Partial)) {
-                        // Partial child forces parent to be partial:
-                        // add 2 virtual items (1 covered + 1 uncovered)
-                        total += 2;
-                        cov   += 1;
-                    } else {
-                        // Uncovered child: one virtual uncovered item
-                        ++total;
-                    }
-                }
-            }
-        }
-
-        int state;
-        if (total == 0) {
-            state = static_cast<int>(covered::CoveredState::Empty); // no files anywhere → empty
-        } else if (cov == 0) {
-            state = static_cast<int>(covered::CoveredState::Uncovered);
-        } else if (cov >= total) {
-            state = static_cast<int>(covered::CoveredState::Covered);
-        } else {
-            state = static_cast<int>(covered::CoveredState::Partial);
-        }
-        result[inode] = state;
-    }
-
-    return result;
-}
-
-// -------------------------------------------------------------------
 // main
 // -------------------------------------------------------------------
 int main(int argc, char* argv[])
@@ -194,7 +57,7 @@ int main(int argc, char* argv[])
         std::cerr << "Warning: no directories found in database.\n";
     }
 
-    auto dir_covered = compute_dir_covered(db, dirs);
+    auto dir_covered = db.compute_dir_covered();
 
     // Step 4: write back covered states to dirs table (inside a transaction)
     {
@@ -250,7 +113,7 @@ int main(int argc, char* argv[])
         std::cout << "\nUncovered files:\n";
 
         // Build path map
-        auto dir_paths = build_dir_paths(dirs, root_path);
+        auto dir_paths = db.build_dir_paths(root_path);
 
         for (const auto& f : all_files) {
             if (!f.covered) {

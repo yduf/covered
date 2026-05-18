@@ -63,68 +63,6 @@ static const char* state_str(int state)
 // Build in-memory filesystem from DB
 // ------------------------------------------------------------------
 
-static std::unordered_map<uint64_t, int>
-compute_dir_covered(covered::Database& db,
-                    const std::vector<covered::DirEntry>& dirs)
-{
-    std::unordered_map<uint64_t, std::vector<uint64_t>> children;
-    uint64_t root_inode = 0;
-    for (const auto& d : dirs) {
-        if (d.parent_inode == 0) root_inode = d.inode;
-        else children[d.parent_inode].push_back(d.inode);
-    }
-
-    std::unordered_map<uint64_t, int> result;
-    std::vector<uint64_t> order;
-    {
-        std::vector<uint64_t> stack;
-        if (root_inode != 0) stack.push_back(root_inode);
-        for (const auto& d : dirs)
-            if (d.parent_inode == 0 && d.inode != root_inode) stack.push_back(d.inode);
-        while (!stack.empty()) {
-            uint64_t cur = stack.back(); stack.pop_back();
-            order.push_back(cur);
-            auto cit = children.find(cur);
-            if (cit != children.end())
-                for (auto ch : cit->second) stack.push_back(ch);
-        }
-        std::reverse(order.begin(), order.end());
-    }
-
-    for (uint64_t inode : order) {
-        auto files = db.get_files_by_dir(inode);
-        int total = static_cast<int>(files.size());
-        int cov = 0;
-        for (const auto& f : files) if (f.covered) ++cov;
-
-        auto cit = children.find(inode);
-        if (cit != children.end()) {
-            for (uint64_t ch : cit->second) {
-                auto rit = result.find(ch);
-                if (rit != result.end()) {
-                    int cs = rit->second;
-                    if (cs == static_cast<int>(covered::CoveredState::Empty)) {
-                        // Empty child: skip – does not affect parent coverage
-                    } else if (cs == static_cast<int>(covered::CoveredState::Covered))
-                    { ++total; ++cov; }
-                    else if (cs == static_cast<int>(covered::CoveredState::Partial))
-                    { total += 2; cov += 1; }
-                    else
-                    { ++total; }
-                }
-            }
-        }
-
-        int state;
-        if (total == 0)      state = static_cast<int>(covered::CoveredState::Empty);
-        else if (cov == 0)   state = static_cast<int>(covered::CoveredState::Uncovered);
-        else if (cov >= total) state = static_cast<int>(covered::CoveredState::Covered);
-        else                 state = static_cast<int>(covered::CoveredState::Partial);
-        result[inode] = state;
-    }
-    return result;
-}
-
 static bool build_fs(covered::Database& db, CoverFs& fs)
 {
     fs.root_path = db.get_root_path().value_or("/");
@@ -136,7 +74,7 @@ static bool build_fs(covered::Database& db, CoverFs& fs)
     if (dirs.empty()) return false;
 
     // Compute dir covered states
-    auto dir_covered = compute_dir_covered(db, dirs);
+    auto dir_covered = db.compute_dir_covered();
 
     // Map inode -> dir entry for path building
     std::unordered_map<uint64_t, const covered::DirEntry*> by_inode;
@@ -200,10 +138,9 @@ static bool build_fs(covered::Database& db, CoverFs& fs)
 
     // Register child directories
     std::unordered_map<uint64_t, std::vector<uint64_t>> children_map;
-    uint64_t root_inode = 0;
     for (const auto& d : dirs) {
-        if (d.parent_inode == 0) root_inode = d.inode;
-        else children_map[d.parent_inode].push_back(d.inode);
+        if (d.parent_inode != 0)
+            children_map[d.parent_inode].push_back(d.inode);
     }
     for (const auto& d : dirs) {
         if (d.parent_inode == 0) continue; // root has no parent entry
@@ -213,8 +150,6 @@ static bool build_fs(covered::Database& db, CoverFs& fs)
             pit->second.children.push_back(d.name);
         }
     }
-    (void)root_inode;
-
     return true;
 }
 

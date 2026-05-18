@@ -1,11 +1,11 @@
-# Covered
+# Covered ☂️
 
 A Tool to check if I have a backup of my file somewhere.
 
 Compare content of source & backup
 and list file in source that do not exist anywhere on backup.
 
-Comes with a [Nemo]() extension so it's easy to have a visual cue of what is _covered_ or not, and it can be used to directly access (for copying) the missing parts.
+Comes with an extension for [Nemo](https://github.com/linuxmint/nemo#nemo) (the linuxmint file-manager) so it's easy to have a visual cue of what is _covered_ or not, and it can be used to directly access (for copying) the missing parts.
 
 ![nemo](/doc/nemo-extension.png)
 
@@ -23,7 +23,7 @@ then run to match them ` ./build/covered_match covered_media_yves_Big/ covered_n
 
 then run to report `./build/cover_report covered_media_yves_Big/`
 
-### DB
+## DB
 
 There is 2 kind of usage
 
