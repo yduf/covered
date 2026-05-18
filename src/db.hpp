@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <unordered_map>
 #include <mutex>
 #include <optional>
 #include <tuple>
@@ -16,6 +17,7 @@ enum class CoveredState : int {
     Uncovered = 0,
     Covered   = 1,
     Partial   = 2,
+    Empty     = 3
 };
 
 struct DirEntry {
@@ -65,6 +67,13 @@ public:
     std::vector<FileEntry> get_files_by_dir(uint64_t dir_inode);
     std::vector<FileEntry> get_all_files();
     void set_dir_covered(uint64_t inode, int covered);
+
+    // Shared algorithm: compute covered state for all directories (bottom-up)
+    // Returns a map inode -> CoveredState
+    std::unordered_map<uint64_t, int> compute_dir_covered();
+
+    // Build a map inode -> full path from the dirs table
+    std::unordered_map<uint64_t, std::string> build_dir_paths(const std::string& root_path);
 
     bool has_error() const { return error_; }
     const std::string& error_msg() const { return error_msg_; }
