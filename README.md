@@ -4,6 +4,7 @@ A Tool to check if I have a backup of my file somewhere.
 
 Compare content of source & backup
 and list file in source that do not exist anywhere on backup.
+It should be reasonably fast for this purpose.
 
 Comes with an extension for [Nemo](https://github.com/linuxmint/nemo#nemo) (the linuxmint file-manager) so it's easy to have a visual cue of what is _covered_ or not, and it can be used to directly access (for copying) the missing parts.
 
@@ -12,21 +13,23 @@ Comes with an extension for [Nemo](https://github.com/linuxmint/nemo#nemo) (the 
 ## Usage
 
 For source and backup, 
-build a database of files and compare them
+these tools will build a database of existing files and compare them.
+It needs to have the source filesystem  and the backup file system reachable.
 
-first run to scan them  
+**First scan them:**
 - scan source `./build/covered_scan_size /media/yves/Big`
 - scan backup `./build/covered_scan_size /nfs/tronaut/mnt_Backup`
 
-then run to match them:  
+**Match them:**    
 `./build/covered_match covered_media_yves_Big/ covered_nfs_tronaut_mnt_Backup/`
 
-then run to report:   
+**Report:**     
 `./build/cover_report covered_media_yves_Big/`
 or list of uncovered files `./build/cover_report --report covered_media_yves_Big/`
 
-Easiest way is now to look at the result with Nemo: 
-install nemo extension (need only once)
+Easiest way is now to look at the result with Nemo. 
+
+Firt install the nemo extension (this only need to be done once)
 
 ```sh
 sudo cp nemo-extension/nemo-covered.py /usr/share/nemo-python/extensions/
@@ -36,15 +39,17 @@ nemo -q && nemo
 Mount the report with FUSE:
 - `mkdir -p /tmp/covered_mount`
 - `./build/cover_fuse covered_media_yves_Big/ /tmp/covered_mount`
-- # Ctrl-C or: fusermount3 -u /tmp/covered_mount when done
 
-)
+
 And now in Nemo go to `/tmp/covered_mount`
 and you should see something like the screen shot above.
 
-
 You can also Check xattr user.coveredd from command line: 
 `getfattr -n user.covered /tmp/covered_mount/some/file.txt`
+
+**Unmount**  
+`Ctrl-C` or `fusermount3 -u /tmp/covered_mount` when done
+
 
 # Install
 
