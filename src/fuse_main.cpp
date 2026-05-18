@@ -210,8 +210,6 @@ static bool build_fs(covered::Database& db, CoverFs& fs)
             pit->second.children.push_back(d.name);
         }
     }
-    (void)root_inode;
-
     return true;
 }
 

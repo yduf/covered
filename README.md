@@ -1,13 +1,11 @@
-# Covered
+# Covered ☂️
 
 A Tool to check if I have a backup of my file somewhere.
 
 Compare content of source & backup
 and list file in source that do not exist anywhere on backup.
 
-For every file covered can also:
-- highlight place where it exist on backup
-- highlight duplicates on sources
+Comes with an extension for [Nemo](https://github.com/linuxmint/nemo#nemo) (the linuxmint file-manager) so it's easy to have a visual cue of what is _covered_ or not, and it can be used to directly access (for copying) the missing parts.
 
 # Principle
 

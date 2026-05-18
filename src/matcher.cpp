@@ -361,15 +361,18 @@ bool Matcher::run() {
         }
 
         // Step 3: compute full hashes for matched files
+        std::unordered_set<uint64_t> src_matched_set(src_matched_inodes.begin(), src_matched_inodes.end());
+        std::unordered_set<uint64_t> bkp_matched_set(bkp_matched_inodes.begin(), bkp_matched_inodes.end());
+
         std::vector<FileInfo> src_to_full;
         std::vector<FileInfo> bkp_to_full;
         for (const auto& f : src_files) {
-            if (std::find(src_matched_inodes.begin(), src_matched_inodes.end(), f.inode) != src_matched_inodes.end()) {
+            if (src_matched_set.count(f.inode)) {
                 src_to_full.push_back(f);
             }
         }
         for (const auto& f : bkp_files) {
-            if (std::find(bkp_matched_inodes.begin(), bkp_matched_inodes.end(), f.inode) != bkp_matched_inodes.end()) {
+            if (bkp_matched_set.count(f.inode)) {
                 bkp_to_full.push_back(f);
             }
         }
@@ -397,12 +400,16 @@ bool Matcher::run() {
                     covered_in_cluster++;
                 }
                 if (debug_) {
-                    auto it = std::find_if(src_files.begin(), src_files.end(),
-                        [inode](const FileInfo& f){ return f.inode == inode; });
-                    if (it != src_files.end()) {
-                        std::string path = build_path(src_db_, it->dir_inode, it->name, src_root_);
+                    std::unordered_map<uint64_t, const FileInfo*> src_inode_map;
+                    for (const auto& sf : src_files) {
+                        src_inode_map[sf.inode] = &sf;
+                    }
+                    auto it = src_inode_map.find(inode);
+                    if (it != src_inode_map.end()) {
+                        const FileInfo* fi = it->second;
+                        std::string path = build_path(src_db_, fi->dir_inode, fi->name, src_root_);
                         std::cout << "[DEBUG] coverage " << path
-                                  << " size=" << it->size
+                                  << " size=" << fi->size
                                   << " full_hash=" << hash_to_hex(h->data(), h->size())
                                   << " result=" << (covered ? "covered" : "not_covered") << "\n";
                     }
