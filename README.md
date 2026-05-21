@@ -56,10 +56,12 @@ You can also Check xattr user.coveredd from command line:
 You need to compile it.
 Yet it should be fast and as simple as:
 
-```sh
-mkdir build
-meson build
-cd build && meson compile
+```bash
+$ git git@github.com:yduf/covered.git
+$ cd covered
+$ meson setup build
+$ cd build && meson compile
+$ sudo meson install
 ```
 
 # Principle

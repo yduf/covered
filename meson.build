@@ -58,6 +58,13 @@ else
     warning('libfuse3-dev not found – cover_fuse will not be built. Install with: sudo apt install libfuse3-dev')
 endif
 
+# Nemo extension – installed to the system-wide Nemo Python extensions directory
+install_data(
+    'nemo-extension/nemo-covered.py',
+    install_dir : '/usr/share/nemo-python/extensions',
+    rename : 'nemo-covered.py',
+)
+
 test_script = find_program('test_match.sh')
 test_script_spaces = find_program('test_match_spaces.sh')
 
