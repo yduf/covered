@@ -1,3 +1,5 @@
 /subprojects/*
 !/subprojects/*.wrap
 !/subprojects/packagefiles/
+
+/covered_*
