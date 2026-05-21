@@ -27,7 +27,8 @@ enum class NodeKind { Dir, File };
 
 struct FsNode {
     NodeKind    kind;
-    int         covered;    // CoveredState: 0=uncovered,1=covered,2=partial
+    int         covered;    // CoveredState: 0=uncovered,1=covered,2=partial,3=empty,4=error
+    int         error;      // 1 if file/dir had an access error
     int64_t     size;       // files only
     int64_t     mtime;      // files only
     std::string real_path;  // files only: absolute path on real fs for read()
@@ -55,6 +56,7 @@ static const char* state_str(int state)
     case static_cast<int>(covered::CoveredState::Covered):   return "covered";
     case static_cast<int>(covered::CoveredState::Partial):   return "partial";
     case static_cast<int>(covered::CoveredState::Empty):     return "empty";
+    case static_cast<int>(covered::CoveredState::Error):     return "error";
     default:                                                  return "uncovered";
     }
 }
@@ -67,8 +69,9 @@ static bool build_fs(covered::Database& db, CoverFs& fs)
 {
     fs.root_path = db.get_root_path().value_or("/");
 
-    // Ensure dirs have covered column
+    // Ensure dirs have covered column and error columns
     db.migrate_dirs_covered_column();
+    db.migrate_error_columns();
 
     auto dirs = db.get_all_dirs();
     if (dirs.empty()) return false;
@@ -109,6 +112,7 @@ static bool build_fs(covered::Database& db, CoverFs& fs)
         FsNode node;
         node.kind    = NodeKind::Dir;
         node.covered = cov_state;
+        node.error   = d.error;
         node.size    = 0;
         node.mtime   = 0;
         fs.nodes[vpath] = node;
@@ -124,7 +128,10 @@ static bool build_fs(covered::Database& db, CoverFs& fs)
 
         FsNode node;
         node.kind    = NodeKind::File;
-        node.covered = f.covered;
+        node.covered = f.covered ? static_cast<int>(covered::CoveredState::Covered)
+                                 : (f.error ? static_cast<int>(covered::CoveredState::Error)
+                                            : static_cast<int>(covered::CoveredState::Uncovered));
+        node.error   = f.error;
         node.size    = f.size;
         node.mtime   = f.mtime;
         // Reconstruct real path from root_path
@@ -200,6 +207,7 @@ static int cfs_open(const char* path, struct fuse_file_info* fi)
     if (it == g_fs->nodes.end()) return -ENOENT;
     if (it->second.kind != NodeKind::File) return -EISDIR;
     if ((fi->flags & O_ACCMODE) != O_RDONLY) return -EACCES;
+    if (it->second.error) return -EACCES;  // cannot read files that had errors
     return 0;
 }
 
@@ -211,7 +219,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
     if (it->second.kind != NodeKind::File) return -EISDIR;
 
     const FsNode& node = it->second;
-    if (node.real_path.empty()) return 0;
+    if (node.error || node.real_path.empty()) return -EACCES;
 
     int fd = ::open(node.real_path.c_str(), O_RDONLY);
     if (fd < 0) return -errno;

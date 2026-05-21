@@ -46,6 +46,7 @@ Database::Database(const std::string& path) {
             inode        INTEGER NOT NULL,
             parent_inode INTEGER,
             name         TEXT    NOT NULL,
+            error        INTEGER DEFAULT NULL,
             PRIMARY KEY (inode)
         ) WITHOUT ROWID;
 
@@ -56,6 +57,7 @@ Database::Database(const std::string& path) {
             size       INTEGER NOT NULL,
             mtime      INTEGER NOT NULL,
             covered    INTEGER NOT NULL DEFAULT 0,
+            error      INTEGER DEFAULT NULL,
             PRIMARY KEY (dir_inode, name)
         ) WITHOUT ROWID;
 
@@ -71,7 +73,7 @@ Database::Database(const std::string& path) {
     }
 
     // Prepared statements for bulk insert
-    const char* sql_dir = "INSERT INTO dirs (inode, parent_inode, name) VALUES (?, ?, ?)";
+    const char* sql_dir = "INSERT INTO dirs (inode, parent_inode, name, error) VALUES (?, ?, ?, ?)";
     rc = sqlite3_prepare_v2(db_, sql_dir, -1, &stmt_dir_, nullptr);
     if (rc != SQLITE_OK) {
         error_ = true;
@@ -79,7 +81,7 @@ Database::Database(const std::string& path) {
         return;
     }
 
-    const char* sql_file = "INSERT INTO files (dir_inode, name, inode, size, mtime, covered) VALUES (?, ?, ?, ?, ?, ?)";
+    const char* sql_file = "INSERT INTO files (dir_inode, name, inode, size, mtime, covered, error) VALUES (?, ?, ?, ?, ?, ?, ?)";
     rc = sqlite3_prepare_v2(db_, sql_file, -1, &stmt_file_, nullptr);
     if (rc != SQLITE_OK) {
         error_ = true;
@@ -165,7 +167,7 @@ std::vector<FileEntry> Database::get_files_by_size(int64_t size) {
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<FileEntry> files;
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "SELECT dir_inode, name, inode, size, mtime, covered FROM files WHERE size = ?";
+    const char* sql = "SELECT dir_inode, name, inode, size, mtime, covered, error FROM files WHERE size = ?";
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_int64(stmt, 1, size);
         while (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -175,7 +177,8 @@ std::vector<FileEntry> Database::get_files_by_size(int64_t size) {
                 static_cast<uint64_t>(sqlite3_column_int64(stmt, 2)),
                 sqlite3_column_int64(stmt, 3),
                 sqlite3_column_int64(stmt, 4),
-                sqlite3_column_int(stmt, 5)
+                sqlite3_column_int(stmt, 5),
+                sqlite3_column_int(stmt, 6)
             });
         }
         sqlite3_finalize(stmt);
@@ -195,6 +198,17 @@ void Database::set_covered(uint64_t inode, int covered) {
     }
 }
 
+void Database::set_file_error(uint64_t inode) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "UPDATE files SET error = 1 WHERE inode = ?";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(inode));
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
+}
+
 // ------------------------------------------------------------------
 // Report-phase helpers
 // ------------------------------------------------------------------
@@ -205,11 +219,19 @@ void Database::migrate_dirs_covered_column() {
     exec_sql(db_, "ALTER TABLE dirs ADD COLUMN covered INTEGER NOT NULL DEFAULT 0;");
 }
 
+void Database::migrate_error_columns() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Ignore error – columns may already exist (new DBs have them in the schema;
+    // existing DBs get them via this ALTER with DEFAULT NULL to match new schema)
+    exec_sql(db_, "ALTER TABLE dirs ADD COLUMN error INTEGER DEFAULT NULL;");
+    exec_sql(db_, "ALTER TABLE files ADD COLUMN error INTEGER DEFAULT NULL;");
+}
+
 std::vector<DirEntry> Database::get_all_dirs() {
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<DirEntry> dirs;
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "SELECT inode, parent_inode, name, covered FROM dirs";
+    const char* sql = "SELECT inode, parent_inode, name, covered, error FROM dirs";
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             DirEntry d;
@@ -222,6 +244,7 @@ std::vector<DirEntry> Database::get_all_dirs() {
             const char* name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
             d.name    = name ? name : "";
             d.covered = sqlite3_column_int(stmt, 3);
+            d.error   = sqlite3_column_int(stmt, 4);
             dirs.push_back(d);
         }
         sqlite3_finalize(stmt);
@@ -233,7 +256,7 @@ std::vector<FileEntry> Database::get_files_by_dir(uint64_t dir_inode) {
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<FileEntry> files;
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "SELECT dir_inode, name, inode, size, mtime, covered FROM files WHERE dir_inode = ?";
+    const char* sql = "SELECT dir_inode, name, inode, size, mtime, covered, error FROM files WHERE dir_inode = ?";
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(dir_inode));
         while (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -243,7 +266,8 @@ std::vector<FileEntry> Database::get_files_by_dir(uint64_t dir_inode) {
                 static_cast<uint64_t>(sqlite3_column_int64(stmt, 2)),
                 sqlite3_column_int64(stmt, 3),
                 sqlite3_column_int64(stmt, 4),
-                sqlite3_column_int(stmt, 5)
+                sqlite3_column_int(stmt, 5),
+                sqlite3_column_int(stmt, 6)
             });
         }
         sqlite3_finalize(stmt);
@@ -255,7 +279,7 @@ std::vector<FileEntry> Database::get_all_files() {
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<FileEntry> files;
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "SELECT dir_inode, name, inode, size, mtime, covered FROM files";
+    const char* sql = "SELECT dir_inode, name, inode, size, mtime, covered, error FROM files";
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             files.push_back({
@@ -264,7 +288,8 @@ std::vector<FileEntry> Database::get_all_files() {
                 static_cast<uint64_t>(sqlite3_column_int64(stmt, 2)),
                 sqlite3_column_int64(stmt, 3),
                 sqlite3_column_int64(stmt, 4),
-                sqlite3_column_int(stmt, 5)
+                sqlite3_column_int(stmt, 5),
+                sqlite3_column_int(stmt, 6)
             });
         }
         sqlite3_finalize(stmt);
@@ -329,6 +354,10 @@ void Database::flush_dirs() {
         else
             sqlite3_bind_int64(stmt_dir_, 2, static_cast<sqlite3_int64>(d.parent_inode));
         sqlite3_bind_text(stmt_dir_, 3, d.name.c_str(), static_cast<int>(d.name.size()), SQLITE_STATIC);
+        if (d.error)
+            sqlite3_bind_int(stmt_dir_, 4, d.error);
+        else
+            sqlite3_bind_null(stmt_dir_, 4);
         int rc = sqlite3_step(stmt_dir_);
         if (rc != SQLITE_DONE) {
             error_ = true;
@@ -349,6 +378,10 @@ void Database::flush_files() {
         sqlite3_bind_int64(stmt_file_, 4, static_cast<sqlite3_int64>(f.size));
         sqlite3_bind_int64(stmt_file_, 5, static_cast<sqlite3_int64>(f.mtime));
         sqlite3_bind_int(stmt_file_, 6, f.covered);
+        if (f.error)
+            sqlite3_bind_int(stmt_file_, 7, f.error);
+        else
+            sqlite3_bind_null(stmt_file_, 7);
         int rc = sqlite3_step(stmt_file_);
         if (rc != SQLITE_DONE) {
             error_ = true;
@@ -437,6 +470,8 @@ Database::compute_dir_covered() {
     for (uint64_t inode : order) {
         auto files = get_files_by_dir(inode);
 
+        // Error files are treated as uncovered for coverage purposes.
+        // Only dirs.error flag (scanner-level error) forces a directory to Error state.
         int total = static_cast<int>(files.size());
         int cov   = 0;
         for (const auto& f : files) {
@@ -451,6 +486,11 @@ Database::compute_dir_covered() {
                     int child_state = rit->second;
                     if (child_state == static_cast<int>(CoveredState::Empty)) {
                         // Empty child: skip – does not affect parent coverage
+                    } else if (child_state == static_cast<int>(CoveredState::Error)) {
+                        // Child with error: treat as uncovered + additional penalty
+                        // to ensure parent is never considered covered or empty
+                        total += 2;
+                        cov   += 1;
                     } else if (child_state == static_cast<int>(CoveredState::Covered)) {
                         ++total;
                         ++cov;
@@ -464,8 +504,16 @@ Database::compute_dir_covered() {
             }
         }
 
+        // Only the scanner-level dir error flag forces Error state.
+        // Error files just count as uncovered (cov stays 0 for them).
+        auto dit = std::find_if(dirs.begin(), dirs.end(), [inode](const DirEntry& d) { return d.inode == inode; });
+        bool dir_has_error = (dit != dirs.end() && dit->error);
+
         int state;
-        if (total == 0) {
+        if (dir_has_error) {
+            // Scanner could not open this directory – unknown contents.
+            state = static_cast<int>(CoveredState::Error);
+        } else if (total == 0) {
             state = static_cast<int>(CoveredState::Empty);
         } else if (cov == 0) {
             state = static_cast<int>(CoveredState::Uncovered);

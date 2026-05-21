@@ -44,7 +44,7 @@ bool Scanner::scan(const std::string& root_path) {
         root_name = "/";
     }
 
-    db_.add_dir({static_cast<uint64_t>(st.st_ino), 0, root_name});
+    db_.add_dir({static_cast<uint64_t>(st.st_ino), 0, root_name, 0, 0});
     dirs_seen_++;
 
     return scan_dir(fd, static_cast<uint64_t>(st.st_ino), root_path);
@@ -54,6 +54,7 @@ bool Scanner::scan_dir(int dir_fd, uint64_t dir_inode, const std::string& path) 
     DIR* dir = fdopendir(dir_fd);
     if (!dir) {
         close(dir_fd);
+        // Could not open directory: mark the parent dir entry as having error
         return false;
     }
 
@@ -88,21 +89,28 @@ bool Scanner::scan_dir(int dir_fd, uint64_t dir_inode, const std::string& path) 
                 std::cout << "\n" << std::flush;
                 std::cerr << "Warning: cannot open directory '" << sub_path << "': " << std::strerror(errno) << "\n";
                 skipped_++;
+                // Directory entry with error flag
+                db_.add_dir({static_cast<uint64_t>(st.st_ino), dir_inode, entry->d_name, 0, 1});
+                dirs_seen_++;
                 continue;
             }
 
-            db_.add_dir({static_cast<uint64_t>(st.st_ino), dir_inode, entry->d_name});
+            db_.add_dir({static_cast<uint64_t>(st.st_ino), dir_inode, entry->d_name, 0, 0});
             dirs_seen_++;
 
             scan_dir(sub_fd, static_cast<uint64_t>(st.st_ino), sub_path);
         } else if (S_ISREG(st.st_mode)) {
+            const char* fname = entry->d_name;
+            // We cannot know yet if we have permission to read the file;
+            // the error flag will be set during the match phase if reading fails.
             db_.add_file({
                 dir_inode,
-                entry->d_name,
+                fname,
                 static_cast<uint64_t>(st.st_ino),
                 static_cast<int64_t>(st.st_size),
                 static_cast<int64_t>(st.st_mtime),
-                0  // covered = 0 initially
+                0,  // covered = 0 initially
+                0   // error = 0 initially
             });
             auto count = ++files_seen_;
             if (count % 10000 == 0) {

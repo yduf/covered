@@ -45,8 +45,9 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    // Step 1: migrate schema – add covered column to dirs if missing
+    // Step 1: migrate schema – add covered column to dirs and error columns if missing
     db.migrate_dirs_covered_column();
+    db.migrate_error_columns();
 
     // Step 2: get root path
     std::string root_path = db.get_root_path().value_or(src_folder);
@@ -81,8 +82,10 @@ int main(int argc, char* argv[])
     auto all_files = db.get_all_files();
     uint64_t total_files    = all_files.size();
     uint64_t covered_files  = 0;
+    uint64_t error_files    = 0;
     for (const auto& f : all_files) {
         if (f.covered) ++covered_files;
+        if (f.error)   ++error_files;
     }
     uint64_t uncovered_files = total_files - covered_files;
 
@@ -91,22 +94,26 @@ int main(int argc, char* argv[])
     uint64_t partial_dirs   = 0;
     uint64_t uncovered_dirs = 0;
     uint64_t empty_dirs     = 0;
+    uint64_t error_dirs     = 0;
     for (const auto& [inode, state] : dir_covered) {
         if      (state == static_cast<int>(covered::CoveredState::Covered))   ++covered_dirs;
         else if (state == static_cast<int>(covered::CoveredState::Partial))   ++partial_dirs;
         else if (state == static_cast<int>(covered::CoveredState::Empty))     ++empty_dirs;
+        else if (state == static_cast<int>(covered::CoveredState::Error))     ++error_dirs;
         else                                                                   ++uncovered_dirs;
     }
 
     std::cout << "Source: " << root_path << "\n";
     std::cout << "Files   : " << total_files
               << "  covered=" << covered_files
-              << "  uncovered=" << uncovered_files << "\n";
+              << "  uncovered=" << uncovered_files
+              << "  error=" << error_files << "\n";
     std::cout << "Dirs    : " << total_dirs
               << "  covered=" << covered_dirs
               << "  partial=" << partial_dirs
               << "  uncovered=" << uncovered_dirs
-              << "  empty=" << empty_dirs << "\n";
+              << "  empty=" << empty_dirs
+              << "  error=" << error_dirs << "\n";
 
     // Step 6: optional report of uncovered files
     if (do_report && uncovered_files > 0) {
@@ -119,7 +126,9 @@ int main(int argc, char* argv[])
             if (!f.covered) {
                 auto it = dir_paths.find(f.dir_inode);
                 std::string dir_path = (it != dir_paths.end()) ? it->second : "?";
-                std::cout << dir_path << "/" << f.name << "\n";
+                std::cout << dir_path << "/" << f.name;
+                if (f.error) std::cout << " [ERROR]";
+                std::cout << "\n";
             }
         }
     }

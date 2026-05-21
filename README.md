@@ -118,25 +118,29 @@ For file in source DB
 report file for which covered flag is null
 
 The report is done with 2 components.
-- A FUSE filesystem that show the arboresence contained in src db, and expose for directory & file a custome attribute xattr: user.covered, which can take 3 states:
+- A FUSE filesystem that show the arboresence contained in src db, and expose for directory & file a custome attribute xattr: user.covered, which can take 5 states:
   For files
     - covered (file has been found in backup)
     - uncovered (file has not been found)
+    - error (file could not be accessed — permission denied, IO error, etc.)
   For Folder
     - covered (all files in folder are covered)
     - uncovered (no file in this folder are covered)
     - partial (some files in folder are covered but not all)
     - empty (folder contains no files at all, recursively)
+    - error (folder could not be scanned — permission denied, etc.; treated as uncovered for parent coverage)
 
 - A Nemo extension that take into account the xattr from the fuse filesystem and:
   - For **files**: adds a colour emblem
     - green emblem if covered
     - red emblem if uncovered
+    - crossed-circle emblem if error (file could not be read)
   - For **folders**: sets a coloured folder icon (via nemo-folder-color-switcher mechanism) AND an emblem
     - green folder + green emblem if all files are covered
     - red folder + red emblem if no files are covered
     - orange folder + orange emblem if partially covered
     - cyan folder (no emblem) if empty (no files at all)
+    - grey folder + crossed-circle emblem if error (folder could not be scanned)
 
 ## Isolation
 
@@ -164,8 +168,8 @@ cover_report [--report|-r] <source_folder>
 Output example:
 ```
 Source: /media/yves/Big/
-Files   : 13146  covered=267  uncovered=12879
-Dirs    : 1870   covered=118  partial=60  uncovered=1692  empty=42
+Files   : 13146  covered=267  uncovered=12879  error=5
+Dirs    : 1870   covered=118  partial=60  uncovered=1692  empty=42  error=3
 ```
 
 ## `cover_fuse`
@@ -177,10 +181,12 @@ Every file and directory exposes a `user.covered` extended attribute:
 |---|---|---|
 | file | `covered` | file was found in backup |
 | file | `uncovered` | file was not found in backup |
+| file | `error` | file could not be accessed (permission etc.) |
 | dir  | `covered` | all files under this dir are covered |
 | dir  | `partial` | some files are covered, some are not |
 | dir  | `uncovered` | no file under this dir is covered |
 | dir  | `empty` | dir (and all sub-dirs) contain no files at all |
+| dir  | `error` | dir could not be scanned (permission etc.) |
 
 ```
 cover_fuse <source_folder> <mount_point> [fuse options]
@@ -201,10 +207,11 @@ via the same `metadata::custom-icon` mechanism used by `nemo-folder-color-switch
 
 | xattr value | Emblem | Folder colour | Mint-X icon theme |
 |---|---|---|---|
-| `covered`   | `emblem-default` (green)   | green | `Mint-X` (default) |
-| `uncovered` | `emblem-important` (red)   | red   | `Mint-X-Red`       |
-| `partial`   | `emblem-new` (orange)      | orange| `Mint-X-Orange`    |
-| `empty`     | *(none)*                   | aqua  | `Mint-X-Aqua`      |
+| `covered`   | `emblem-default` (green)      | green  | `Mint-X` (default) |
+| `uncovered` | `emblem-important` (red)      | red    | `Mint-X-Red`       |
+| `partial`   | `emblem-new` (orange)         | orange | `Mint-X-Orange`    |
+| `empty`     | *(none)*                      | aqua   | `Mint-X-Aqua`      |
+| `error`     | `emblem-unreadable` (crossed) | grey   | `Mint-X-Grey`      |
 
 Folder coloring reads `/usr/share/folder-color-switcher/colors.d/*.json` at
 startup to find the color-variant icon theme for the active GTK theme.
@@ -258,7 +265,8 @@ Rows:
 | `inode` | INTEGER PRIMARY KEY | Directory inode |
 | `parent_inode` | INTEGER | Parent directory inode (`NULL` for root) |
 | `name` | TEXT | Directory basename |
-| `covered` | INTEGER DEFAULT 0 | `0`=uncovered, `1`=covered, `2`=partial, `3`=empty — computed by `cover_report` |
+| `covered` | INTEGER DEFAULT 0 | `0`=uncovered, `1`=covered, `2`=partial, `3`=empty, `4`=error — computed by `cover_report` |
+| `error` | INTEGER DEFAULT 0 | `1` if directory could not be scanned (permission denied, etc.) |
 
 #### `files`
 | Column | Type | Description |
@@ -269,6 +277,7 @@ Rows:
 | `size` | INTEGER | File size in bytes |
 | `mtime` | INTEGER | Modification time (seconds since epoch) |
 | `covered` | INTEGER DEFAULT 0 | `1` if a matching file exists in backup, `0` otherwise |
+| `error` | INTEGER DEFAULT 0 | `1` if file could not be accessed during match (permission denied, etc.) |
 
 Indexes: `idx_files_inode(inode)`, `idx_files_size(size)`
 

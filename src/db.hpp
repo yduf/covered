@@ -12,12 +12,13 @@
 
 namespace covered {
 
-// covered value for dirs (4-state)
+// covered value for dirs (5-state)
 enum class CoveredState : int {
     Uncovered = 0,
     Covered   = 1,
     Partial   = 2,
     Empty     = 3,  // dir (and all sub-dirs) contain no files at all
+    Error     = 4,  // dir or file could not be accessed (permission, IO error)
 };
 
 struct DirEntry {
@@ -25,6 +26,7 @@ struct DirEntry {
     uint64_t parent_inode;  // 0 for root (no dir has inode 0)
     std::string name;
     int covered = 0; // CoveredState, used for reporting
+    int error   = 0; // 1 if directory could not be scanned (permission etc.)
 };
 
 struct FileEntry {
@@ -34,6 +36,7 @@ struct FileEntry {
     int64_t  size;
     int64_t  mtime;  // seconds since epoch
     int      covered; // used for reporting at the end
+    int      error;   // 1 if file could not be accessed (permission etc.)
 };
 
 class Database {
@@ -60,9 +63,11 @@ public:
     std::vector<FileEntry> get_files_by_size(int64_t size);
     uint64_t count_files();
     void set_covered(uint64_t inode, int covered);
+    void set_file_error(uint64_t inode);
 
     // Report-phase helpers
     void migrate_dirs_covered_column();
+    void migrate_error_columns();
     std::vector<DirEntry> get_all_dirs();
     std::vector<FileEntry> get_files_by_dir(uint64_t dir_inode);
     std::vector<FileEntry> get_all_files();

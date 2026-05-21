@@ -13,6 +13,7 @@ Color mapping:
   uncovered → Red    folder + emblem-important (red exclamation)
   partial   → Orange folder + emblem-new (orange star)
   empty     → Aqua   folder (no emblem – dir contains no files at all)
+  error     → Grey   folder + emblem-unreadable (crossed circle – access error)
 
 Install:
   sudo cp nemo-covered.py /usr/share/nemo-python/extensions/
@@ -35,19 +36,21 @@ COLORS_D_DIR = "/usr/share/folder-color-switcher/colors.d"
 
 # Map xattr value → emblem icon name (None = no emblem)
 EMBLEM_MAP = {
-    b"covered":   "emblem-default",    # green check
-    b"uncovered": "emblem-important",  # red exclamation
-    b"partial":   "emblem-new",        # orange/yellow star
-    b"empty":     None,                # no emblem for empty dirs
+    b"covered":   "emblem-default",     # green check
+    b"uncovered": "emblem-important",   # red exclamation
+    b"partial":   "emblem-new",         # orange/yellow star
+    b"empty":     None,                 # no emblem for empty dirs
+    b"error":     "emblem-unreadable",  # crossed circle for access errors
 }
 
 # Map xattr value → human-readable color name as it appears in colors.d JSON.
-# "Aqua" is the closest available Mint-X color to cyan.
+# "Grey" is used for error folders.
 STATE_COLOR_MAP = {
     b"covered":   "Green",
     b"uncovered": "Red",
     b"partial":   "Orange",
     b"empty":     "Aqua",
+    b"error":     "Grey",
 }
 
 # Per-session cache: file URI → last icon URI written to GIO metadata.

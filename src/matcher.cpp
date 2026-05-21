@@ -97,10 +97,10 @@ std::string Matcher::build_path(Database& db, uint64_t dir_inode,
 }
 
 void Matcher::compute_head_hashes(Database& db, HashDatabase& hash_db,
-                                  const std::vector<FileInfo>& files,
-                                  const std::string& root,
-                                  const std::string& db_type
-                                ) {
+                                   const std::vector<FileInfo>& files,
+                                   const std::string& root,
+                                   const std::string& db_type
+                                 ) {
     for (const auto& f : files) {
         auto t0 = std::chrono::steady_clock::now();
         auto existing = hash_db.get_head_hash(f.inode);
@@ -114,17 +114,27 @@ void Matcher::compute_head_hashes(Database& db, HashDatabase& hash_db,
             struct stat st;
             if (stat(path.c_str(), &st) < 0) {
                 std::cerr << "Warning: cannot stat " << db_type << " '" << path << "': " << std::strerror(errno) << "\n";
+                // Mark file as having error in source DB
+                if (&db == &src_db_) {
+                    src_db_.set_file_error(f.inode);
+                }
                 continue;
             }
             if (static_cast<uint64_t>(st.st_ino) != f.inode) {
                 std::cerr << "Warning: inode mismatch for " << db_type << " '" << path
                           << "': expected " << f.inode << ", got " << st.st_ino << "\n";
+                if (&db == &src_db_) {
+                    src_db_.set_file_error(f.inode);
+                }
                 continue;
             }
 
             std::ifstream file(path, std::ios::binary);
             if (!file) {
                 std::cerr << "Warning: cannot open " << db_type << " '" << path << "': " << std::strerror(errno) << "\n";
+                if (&db == &src_db_) {
+                    src_db_.set_file_error(f.inode);
+                }
                 continue;
             }
 
@@ -169,8 +179,8 @@ void Matcher::compute_head_hashes(Database& db, HashDatabase& hash_db,
 }
 
 void Matcher::compute_full_hashes(Database& db, HashDatabase& hash_db,
-                                  const std::vector<FileInfo>& files,
-                                  const std::string& root) {
+                                   const std::vector<FileInfo>& files,
+                                   const std::string& root) {
     for (const auto& f : files) {
         auto t0 = std::chrono::steady_clock::now();
         auto existing = hash_db.get_full_hash(f.inode);
@@ -184,17 +194,26 @@ void Matcher::compute_full_hashes(Database& db, HashDatabase& hash_db,
             struct stat st;
             if (stat(path.c_str(), &st) < 0) {
                 std::cerr << "Warning: cannot stat '" << path << "': " << std::strerror(errno) << "\n";
+                if (&db == &src_db_) {
+                    src_db_.set_file_error(f.inode);
+                }
                 continue;
             }
             if (static_cast<uint64_t>(st.st_ino) != f.inode) {
                 std::cerr << "Warning: inode mismatch for '" << path
                           << "': expected " << f.inode << ", got " << st.st_ino << "\n";
+                if (&db == &src_db_) {
+                    src_db_.set_file_error(f.inode);
+                }
                 continue;
             }
 
             std::ifstream file(path, std::ios::binary);
             if (!file) {
                 std::cerr << "Warning: cannot open '" << path << "': " << std::strerror(errno) << "\n";
+                if (&db == &src_db_) {
+                    src_db_.set_file_error(f.inode);
+                }
                 continue;
             }
 
