@@ -35,7 +35,7 @@ Database::Database(const std::string& path) {
     exec_sql(db_, "PRAGMA temp_store=MEMORY;");
     exec_sql(db_, "PRAGMA mmap_size=30000000000;");
 
-    // Schema
+    // Schema (CREATE TABLE IF NOT EXISTS — safe for new DBs)
     const char* schema = R"(
         CREATE TABLE IF NOT EXISTS meta (
             key   TEXT PRIMARY KEY,
@@ -71,6 +71,10 @@ Database::Database(const std::string& path) {
         error_msg_ = sqlite3_errmsg(db_);
         return;
     }
+
+    // Backward compat: add error columns to existing DBs that lack them.
+    // Must run BEFORE prepared statements that reference the column.
+    migrate_error_columns();
 
     // Prepared statements for bulk insert
     const char* sql_dir = "INSERT INTO dirs (inode, parent_inode, name, error) VALUES (?, ?, ?, ?)";
@@ -221,8 +225,8 @@ void Database::migrate_dirs_covered_column() {
 
 void Database::migrate_error_columns() {
     std::lock_guard<std::mutex> lock(mutex_);
-    // Ignore error – columns may already exist (new DBs have them in the schema;
-    // existing DBs get them via this ALTER with DEFAULT NULL to match new schema)
+    // Ignore error – columns may already exist (new DBs have them from the CREATE TABLE;
+    // existing DBs get them via ALTER with DEFAULT NULL)
     exec_sql(db_, "ALTER TABLE dirs ADD COLUMN error INTEGER DEFAULT NULL;");
     exec_sql(db_, "ALTER TABLE files ADD COLUMN error INTEGER DEFAULT NULL;");
 }

@@ -54,6 +54,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Database constructor auto-migrates error columns for backward compat
     covered::Database src_db(src_db_path);
     if (src_db.has_error()) {
         std::cerr << "Error opening source database: " << src_db.error_msg() << "\n";
