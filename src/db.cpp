@@ -58,11 +58,17 @@ Database::Database(const std::string& path) {
             mtime      INTEGER NOT NULL,
             covered    INTEGER NOT NULL DEFAULT 0,
             error      INTEGER DEFAULT NULL,
+            backup_id  INTEGER DEFAULT NULL,
             PRIMARY KEY (dir_inode, name)
         ) WITHOUT ROWID;
 
         CREATE INDEX IF NOT EXISTS idx_files_inode ON files(inode);
         CREATE INDEX IF NOT EXISTS idx_files_size  ON files(size);
+
+        CREATE TABLE IF NOT EXISTS backup_db (
+            id   INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT NOT NULL UNIQUE
+        );
     )";
 
     rc = exec_sql(db_, schema);
@@ -75,6 +81,8 @@ Database::Database(const std::string& path) {
     // Backward compat: add error columns to existing DBs that lack them.
     // Must run BEFORE prepared statements that reference the column.
     migrate_error_columns();
+    migrate_backup_id_column();
+    migrate_backup_db_table();
 
     // Prepared statements for bulk insert
     const char* sql_dir = "INSERT INTO dirs (inode, parent_inode, name, error) VALUES (?, ?, ?, ?)";
@@ -85,7 +93,7 @@ Database::Database(const std::string& path) {
         return;
     }
 
-    const char* sql_file = "INSERT INTO files (dir_inode, name, inode, size, mtime, covered, error) VALUES (?, ?, ?, ?, ?, ?, ?)";
+    const char* sql_file = "INSERT INTO files (dir_inode, name, inode, size, mtime, covered, error, backup_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
     rc = sqlite3_prepare_v2(db_, sql_file, -1, &stmt_file_, nullptr);
     if (rc != SQLITE_OK) {
         error_ = true;
@@ -229,6 +237,61 @@ void Database::migrate_error_columns() {
     // existing DBs get them via ALTER with DEFAULT NULL)
     exec_sql(db_, "ALTER TABLE dirs ADD COLUMN error INTEGER DEFAULT NULL;");
     exec_sql(db_, "ALTER TABLE files ADD COLUMN error INTEGER DEFAULT NULL;");
+}
+
+void Database::migrate_backup_id_column() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Ignore error – column may already exist
+    exec_sql(db_, "ALTER TABLE files ADD COLUMN backup_id INTEGER DEFAULT NULL;");
+}
+
+void Database::migrate_backup_db_table() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Ignore error – table may already exist
+    exec_sql(db_, "CREATE TABLE IF NOT EXISTS backup_db ("
+                   "  id   INTEGER PRIMARY KEY AUTOINCREMENT,"
+                   "  path TEXT NOT NULL UNIQUE"
+                   ");");
+}
+
+int Database::register_backup_db(const std::string& backup_path) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // First check if this backup path is already registered
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql_check = "SELECT id FROM backup_db WHERE path = ?";
+    if (sqlite3_prepare_v2(db_, sql_check, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, backup_path.c_str(), static_cast<int>(backup_path.size()), SQLITE_STATIC);
+        int rc = sqlite3_step(stmt);
+        if (rc == SQLITE_ROW) {
+            int id = sqlite3_column_int(stmt, 0);
+            sqlite3_finalize(stmt);
+            return id; // already registered, return existing id
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    // Not registered yet, insert it
+    const char* sql_insert = "INSERT INTO backup_db (path) VALUES (?)";
+    if (sqlite3_prepare_v2(db_, sql_insert, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, backup_path.c_str(), static_cast<int>(backup_path.size()), SQLITE_STATIC);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
+
+    // Return the new id (last_insert_rowid)
+    return static_cast<int>(sqlite3_last_insert_rowid(db_));
+}
+
+void Database::set_file_backup_id(uint64_t inode, int backup_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "UPDATE files SET backup_id = ? WHERE inode = ?";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, backup_id);
+        sqlite3_bind_int64(stmt, 2, static_cast<sqlite3_int64>(inode));
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
 }
 
 std::vector<DirEntry> Database::get_all_dirs() {
@@ -386,6 +449,10 @@ void Database::flush_files() {
             sqlite3_bind_int(stmt_file_, 7, f.error);
         else
             sqlite3_bind_null(stmt_file_, 7);
+        if (f.backup_id > 0)
+            sqlite3_bind_int(stmt_file_, 8, f.backup_id);
+        else
+            sqlite3_bind_null(stmt_file_, 8);
         int rc = sqlite3_step(stmt_file_);
         if (rc != SQLITE_DONE) {
             error_ = true;

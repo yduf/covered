@@ -35,8 +35,9 @@ struct FileEntry {
     uint64_t inode;
     int64_t  size;
     int64_t  mtime;  // seconds since epoch
-    int      covered; // used for reporting at the end
-    int      error;   // 1 if file could not be accessed (permission etc.)
+    int      covered;   // used for reporting at the end
+    int      error;     // 1 if file could not be accessed (permission etc.)
+    int      backup_id = 0; // id of the backup_db that matched this file (0 = none)
 };
 
 class Database {
@@ -63,11 +64,15 @@ public:
     std::vector<FileEntry> get_files_by_size(int64_t size);
     uint64_t count_files();
     void set_covered(uint64_t inode, int covered);
+    void set_file_backup_id(uint64_t inode, int backup_id);
     void set_file_error(uint64_t inode);
 
     // Report-phase helpers
     void migrate_dirs_covered_column();
     void migrate_error_columns();
+    void migrate_backup_id_column();
+    void migrate_backup_db_table();
+    int  register_backup_db(const std::string& backup_path);
     std::vector<DirEntry> get_all_dirs();
     std::vector<FileEntry> get_files_by_dir(uint64_t dir_inode);
     std::vector<FileEntry> get_all_files();

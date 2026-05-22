@@ -66,6 +66,20 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Determine absolute backup root path for registration
+    std::string bkp_abs_path = bkp_db.get_root_path().value_or("");
+    if (bkp_abs_path.empty()) {
+        bkp_abs_path = read_root_from_json(bkp_folder + "/config.json");
+    }
+    if (bkp_abs_path.empty()) {
+        bkp_abs_path = std::filesystem::absolute(bkp_folder).string();
+    }
+
+    // Register this backup_db in the source DB's backup_db table.
+    // Returns the id (existing or newly created).
+    int backup_id = src_db.register_backup_db(bkp_abs_path);
+    std::cout << "Backup registered with id=" << backup_id << " (path=" << bkp_abs_path << ")\n";
+
     std::string src_root = src_db.get_root_path().value_or("");
     std::string bkp_root = bkp_db.get_root_path().value_or("");
 
@@ -102,7 +116,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Source root: " << src_root << "\n";
     std::cout << "Backup root: " << bkp_root << "\n";
 
-    covered::Matcher matcher(src_db, src_hash, bkp_db, bkp_hash, src_root, bkp_root, debug);
+    covered::Matcher matcher(src_db, src_hash, bkp_db, bkp_hash, src_root, bkp_root, backup_id, debug);
     bool ok = matcher.run();
 
     if (!ok) {

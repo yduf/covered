@@ -15,7 +15,7 @@ public:
     Matcher(Database& src_db, HashDatabase& src_hash,
             Database& bkp_db, HashDatabase& bkp_hash,
             const std::string& src_root, const std::string& bkp_root,
-            bool debug = false);
+            int backup_id, bool debug = false);
 
     bool run();
 
@@ -48,6 +48,7 @@ private:
     HashDatabase& bkp_hash_;
     std::string src_root_;
     std::string bkp_root_;
+    int backup_id_ = 0;
 
     struct DirCache {
         std::unordered_map<uint64_t, std::string> name;

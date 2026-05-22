@@ -50,6 +50,8 @@ You can also Check xattr user.coveredd from command line:
 **Unmount**  
 `Ctrl-C` or `fusermount3 -u /tmp/covered_mount` when done
 
+You can match one source to multiple different backup, the first match will be memorized. The backup DB are memorized as well in the source DB, so the nemo extension can help you find where is your backup.
+
 
 # Install
 
@@ -279,9 +281,21 @@ Rows:
 | `size` | INTEGER | File size in bytes |
 | `mtime` | INTEGER | Modification time (seconds since epoch) |
 | `covered` | INTEGER DEFAULT 0 | `1` if a matching file exists in backup, `0` otherwise |
-| `error` | INTEGER DEFAULT 0 | `1` if file could not be accessed during match (permission denied, etc.) |
+| `error` | INTEGER DEFAULT NULL | `1` if file could not be accessed during match (permission denied, etc.) |
+| `backup_id` | INTEGER DEFAULT NULL | Foreign key to `backup_db.id` identifying which backup matched this file (`NULL` if unmatched) |
 
 Indexes: `idx_files_inode(inode)`, `idx_files_size(size)`
+
+#### `backup_db`
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PRIMARY KEY AUTOINCREMENT | Unique identifier for each backup source |
+| `path` | TEXT NOT NULL UNIQUE | Absolute path of the backup root |
+
+This table tracks which backups have been matched against this source.
+Rows are inserted automatically by `covered_match`; matching the same backup
+again reuses the existing `id` (idempotent). The `backup_id` on each matched
+file points to the first backup that contained a matching copy.
 
 ### `hash.db` tables
 

@@ -20,10 +20,11 @@ static constexpr size_t BLAKE3_HASH_LEN = BLAKE3_OUT_LEN; // 32 bytes
 Matcher::Matcher(Database& src_db, HashDatabase& src_hash,
                  Database& bkp_db, HashDatabase& bkp_hash,
                  const std::string& src_root, const std::string& bkp_root,
-                 bool debug)
+                 int backup_id, bool debug)
     : src_db_(src_db), src_hash_(src_hash),
       bkp_db_(bkp_db), bkp_hash_(bkp_hash),
-      src_root_(src_root), bkp_root_(bkp_root), debug_(debug) {}
+      src_root_(src_root), bkp_root_(bkp_root),
+      backup_id_(backup_id), debug_(debug) {}
 
 Matcher::DirCache& Matcher::get_dir_cache(Database& db) {
     return (&db == &src_db_) ? src_dir_cache_ : bkp_dir_cache_;
@@ -415,6 +416,9 @@ bool Matcher::run() {
                 bool covered = bkp_full_set.count(key) != 0;
                 if (covered) {
                     src_db_.set_covered(inode, 1);
+                    if (backup_id_ > 0) {
+                        src_db_.set_file_backup_id(inode, backup_id_);
+                    }
                     files_covered_++;
                     covered_in_cluster++;
                 }
