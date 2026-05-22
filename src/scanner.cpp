@@ -9,6 +9,7 @@
 #include <iostream>
 #include <fstream>
 #include <cerrno>
+#include <chrono>
 
 #include "blake3.h"
 
@@ -53,16 +54,32 @@ bool Scanner::scan(const std::string& root_path) {
     db_.add_dir({static_cast<uint64_t>(st.st_ino), 0, root_name, 0, 0});
     dirs_seen_++;
 
-    return scan_dir(fd, static_cast<uint64_t>(st.st_ino), root_path);
+    auto last_print = std::chrono::steady_clock::now();
+    bool ok = scan_dir(fd, static_cast<uint64_t>(st.st_ino), root_path, last_print);
+
+    // Print final progress line (don't leave a stale partial line)
+    if (files_seen_ > 0) {
+        std::cout << "\rScanned " << files_seen_ << " files";
+        if (hash_db_) {
+            std::cout << "  head=" << head_hashes_computed_
+                      << " full=" << full_hashes_computed_;
+        }
+        std::cout << "...                        " << std::flush;
+    }
+
+    return ok;
 }
 
-bool Scanner::scan_dir(int dir_fd, uint64_t dir_inode, const std::string& path) {
+bool Scanner::scan_dir(int dir_fd, uint64_t dir_inode, const std::string& path,
+                       std::chrono::steady_clock::time_point& last_print) {
+    using namespace std::chrono;
     DIR* dir = fdopendir(dir_fd);
     if (!dir) {
         close(dir_fd);
-        // Could not open directory: mark the parent dir entry as having error
         return false;
     }
+
+    const auto print_interval = seconds(2);
 
     struct dirent* entry;
     while ((entry = readdir(dir)) != nullptr) {
@@ -95,7 +112,6 @@ bool Scanner::scan_dir(int dir_fd, uint64_t dir_inode, const std::string& path) 
                 std::cout << "\n" << std::flush;
                 std::cerr << "Warning: cannot open directory '" << sub_path << "': " << std::strerror(errno) << "\n";
                 skipped_++;
-                // Directory entry with error flag
                 db_.add_dir({static_cast<uint64_t>(st.st_ino), dir_inode, entry->d_name, 0, 1});
                 dirs_seen_++;
                 continue;
@@ -104,32 +120,37 @@ bool Scanner::scan_dir(int dir_fd, uint64_t dir_inode, const std::string& path) 
             db_.add_dir({static_cast<uint64_t>(st.st_ino), dir_inode, entry->d_name, 0, 0});
             dirs_seen_++;
 
-            scan_dir(sub_fd, static_cast<uint64_t>(st.st_ino), sub_path);
+            scan_dir(sub_fd, static_cast<uint64_t>(st.st_ino), sub_path, last_print);
         } else if (S_ISREG(st.st_mode)) {
             const char* fname = entry->d_name;
             uint64_t inode = static_cast<uint64_t>(st.st_ino);
             int64_t size = static_cast<int64_t>(st.st_size);
 
-            // We cannot know yet if we have permission to read the file;
-            // the error flag will be set during the match phase if reading fails.
             db_.add_file({
                 dir_inode,
                 fname,
                 inode,
                 size,
                 static_cast<int64_t>(st.st_mtime),
-                0,  // covered = 0 initially
-                0   // error = 0 initially
+                0,
+                0
             });
 
-            // If hash computation is enabled, compute hashes immediately
             if (hash_db_) {
                 compute_file_hashes(inode, sub_path, size);
             }
 
-            auto count = ++files_seen_;
-            if (count % 10000 == 0) {
-                std::cout << "\rScanned " << count << " files so far... (current folder: " << path << ")" << std::flush;
+            ++files_seen_;
+
+            auto now = steady_clock::now();
+            if (now - last_print >= print_interval) {
+                std::cout << "\rScanned " << files_seen_ << " files so far...";
+                if (hash_db_) {
+                    std::cout << "  head=" << head_hashes_computed_
+                              << " full=" << full_hashes_computed_;
+                }
+                std::cout << " (current folder: " << path << ")" << std::flush;
+                last_print = now;
             }
         }
         // Symlinks and special files are ignored

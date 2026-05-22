@@ -21,7 +21,8 @@ public:
     uint64_t full_hashes_computed() const { return full_hashes_computed_; }
 
 private:
-    bool scan_dir(int dir_fd, uint64_t dir_inode, const std::string& path);
+    bool scan_dir(int dir_fd, uint64_t dir_inode, const std::string& path,
+                  std::chrono::steady_clock::time_point& last_print);
 
     void compute_file_hashes(uint64_t inode, const std::string& path, int64_t size);
 
