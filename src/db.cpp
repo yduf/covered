@@ -282,6 +282,22 @@ int Database::register_backup_db(const std::string& backup_path) {
     return static_cast<int>(sqlite3_last_insert_rowid(db_));
 }
 
+std::string Database::get_backup_path(int backup_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT path FROM backup_db WHERE id = ?";
+    std::string result;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, backup_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char* text = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            if (text) result = std::string(text);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return result;
+}
+
 void Database::set_file_backup_id(uint64_t inode, int backup_id) {
     std::lock_guard<std::mutex> lock(mutex_);
     sqlite3_stmt* stmt = nullptr;
@@ -346,9 +362,12 @@ std::vector<FileEntry> Database::get_all_files() {
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<FileEntry> files;
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "SELECT dir_inode, name, inode, size, mtime, covered, error FROM files";
+    const char* sql = "SELECT dir_inode, name, inode, size, mtime, covered, error, backup_id FROM files";
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
         while (sqlite3_step(stmt) == SQLITE_ROW) {
+            int bid = 0;
+            if (sqlite3_column_type(stmt, 7) != SQLITE_NULL)
+                bid = sqlite3_column_int(stmt, 7);
             files.push_back({
                 static_cast<uint64_t>(sqlite3_column_int64(stmt, 0)),
                 reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)),
@@ -356,7 +375,8 @@ std::vector<FileEntry> Database::get_all_files() {
                 sqlite3_column_int64(stmt, 3),
                 sqlite3_column_int64(stmt, 4),
                 sqlite3_column_int(stmt, 5),
-                sqlite3_column_int(stmt, 6)
+                sqlite3_column_int(stmt, 6),
+                bid
             });
         }
         sqlite3_finalize(stmt);

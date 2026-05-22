@@ -31,6 +31,7 @@ struct FsNode {
     int         error;      // 1 if file/dir had an access error
     int64_t     size;       // files only
     int64_t     mtime;      // files only
+    int         backup_id;  // files only: id of the backup_db that matched this file (0 = none)
     std::string real_path;  // files only: absolute path on real fs for read()
     std::vector<std::string> children; // basenames of direct children (dirs+files)
 };
@@ -41,6 +42,8 @@ struct FsNode {
 
 struct CoverFs {
     std::string root_path;
+    std::string src_db_folder; // path to the source DB folder
+    std::unordered_map<int, std::string> backup_paths; // backup_id -> absolute backup root path
     std::unordered_map<std::string, FsNode> nodes; // vpath -> FsNode
 };
 
@@ -110,11 +113,12 @@ static bool build_fs(covered::Database& db, CoverFs& fs)
         int cov_state = cit != dir_covered.end() ? cit->second : 0;
 
         FsNode node;
-        node.kind    = NodeKind::Dir;
-        node.covered = cov_state;
-        node.error   = d.error;
-        node.size    = 0;
-        node.mtime   = 0;
+        node.kind      = NodeKind::Dir;
+        node.covered   = cov_state;
+        node.error     = d.error;
+        node.size      = 0;
+        node.mtime     = 0;
+        node.backup_id = 0;
         fs.nodes[vpath] = node;
     }
 
@@ -127,13 +131,14 @@ static bool build_fs(covered::Database& db, CoverFs& fs)
         std::string vpath = (dir_vpath == "/" ? "" : dir_vpath) + "/" + f.name;
 
         FsNode node;
-        node.kind    = NodeKind::File;
-        node.covered = f.covered ? static_cast<int>(covered::CoveredState::Covered)
-                                 : (f.error ? static_cast<int>(covered::CoveredState::Error)
-                                            : static_cast<int>(covered::CoveredState::Uncovered));
-        node.error   = f.error;
-        node.size    = f.size;
-        node.mtime   = f.mtime;
+        node.kind      = NodeKind::File;
+        node.covered   = f.covered ? static_cast<int>(covered::CoveredState::Covered)
+                                   : (f.error ? static_cast<int>(covered::CoveredState::Error)
+                                              : static_cast<int>(covered::CoveredState::Uncovered));
+        node.error     = f.error;
+        node.size      = f.size;
+        node.mtime     = f.mtime;
+        node.backup_id = f.backup_id;
         // Reconstruct real path from root_path
         node.real_path = fs.root_path + vpath;
         fs.nodes[vpath] = node;
@@ -161,7 +166,7 @@ static bool build_fs(covered::Database& db, CoverFs& fs)
 }
 
 // ------------------------------------------------------------------
-// FUSE operations (forward declarations for the ops table)
+// FUSE operations
 // ------------------------------------------------------------------
 
 static int cfs_getattr(const char* path, struct stat* st, struct fuse_file_info* /*fi*/)
@@ -230,17 +235,76 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
     return res;
 }
 
+// ------------------------------------------------------------------
+// Extended attributes
+// ------------------------------------------------------------------
+
+// Build the compact path: every intermediate folder reduced to first char,
+// last folder stays intact.  e.g. /media/yves/Big -> /m/y/Big
+static std::string compact_path(const std::string& path)
+{
+    if (path.empty()) return "";
+    // Split by '/'
+    std::vector<std::string> parts;
+    size_t start = 0;
+    if (path[0] == '/') start = 1; // skip leading slash
+    std::string current;
+    for (size_t i = start; i <= path.size(); ++i) {
+        if (i == path.size() || path[i] == '/') {
+            if (!current.empty()) parts.push_back(current);
+            current.clear();
+        } else {
+            current += path[i];
+        }
+    }
+    if (parts.empty()) return "";
+    std::string result = "/";
+    for (size_t i = 0; i < parts.size() - 1; ++i) {
+        result += parts[i][0];
+        result += "/";
+    }
+    result += parts.back();
+    return result;
+}
+
 static int cfs_listxattr(const char* path, char* buf, size_t size)
 {
     auto it = g_fs->nodes.find(path);
-    if (it == g_fs->nodes.end()) return -ENOENT;
+    if (it == g_fs->nodes.end()) {
+        fprintf(stderr, "cfs_listxattr: ENOENT for path='%s'\n", path);
+        return -ENOENT;
+    }
 
-    const char xattr_name[] = "user.covered";
-    size_t needed = sizeof(xattr_name); // includes null terminator
+    const FsNode& node = it->second;
+    fprintf(stderr, "cfs_listxattr: path='%s' kind=%s covered=%d backup_id=%d\n",
+            path,
+            node.kind == NodeKind::Dir ? "Dir" : "File",
+            node.covered, node.backup_id);
+
+    // Simply use the old working implementation, plus extra names
+    size_t needed = sizeof("user.covered"); // includes null
+    bool add_extra = false;
+
+    // On files that are covered with a backup, expose two more xattrs
+    if (node.kind == NodeKind::File
+        && node.covered == static_cast<int>(covered::CoveredState::Covered)
+        && node.backup_id > 0) {
+        needed += sizeof("user.covered_backup") + sizeof("user.covered_at");
+        add_extra = true;
+    }
 
     if (size == 0) return static_cast<int>(needed);
     if (size < needed) return -ERANGE;
-    memcpy(buf, xattr_name, needed);
+
+    char* p = buf;
+    memcpy(p, "user.covered", sizeof("user.covered"));
+    p += sizeof("user.covered");
+    if (add_extra) {
+        memcpy(p, "user.covered_backup", sizeof("user.covered_backup"));
+        p += sizeof("user.covered_backup");
+        memcpy(p, "user.covered_at", sizeof("user.covered_at"));
+        p += sizeof("user.covered_at");
+    }
     return static_cast<int>(needed);
 }
 
@@ -249,15 +313,58 @@ static int cfs_getxattr(const char* path, const char* name, char* buf, size_t si
     auto it = g_fs->nodes.find(path);
     if (it == g_fs->nodes.end()) return -ENOENT;
 
-    if (strcmp(name, "user.covered") != 0) return -ENODATA;
+    const FsNode& node = it->second;
 
-    const char* val = state_str(it->second.covered);
-    size_t vlen = strlen(val); // without null
+    // user.covered — the standard coverage state
+    if (strcmp(name, "user.covered") == 0) {
+        const char* val = state_str(node.covered);
+        size_t vlen = strlen(val);
+        if (size == 0) return static_cast<int>(vlen);
+        if (size < vlen) return -ERANGE;
+        memcpy(buf, val, vlen);
+        return static_cast<int>(vlen);
+    }
 
-    if (size == 0) return static_cast<int>(vlen);
-    if (size < vlen) return -ERANGE;
-    memcpy(buf, val, vlen);
-    return static_cast<int>(vlen);
+    // user.covered_src_db — path to the source DB folder (root only)
+    if (strcmp(name, "user.covered_src_db") == 0) {
+        size_t vlen = g_fs->src_db_folder.size();
+        if (size == 0) return static_cast<int>(vlen);
+        if (size < vlen) return -ERANGE;
+        memcpy(buf, g_fs->src_db_folder.c_str(), vlen);
+        return static_cast<int>(vlen);
+    }
+
+    // user.covered_backup — compact form of the backup root path
+    if (strcmp(name, "user.covered_backup") == 0) {
+        if (node.backup_id <= 0) return -ENODATA;
+        auto bit = g_fs->backup_paths.find(node.backup_id);
+        if (bit == g_fs->backup_paths.end()) return -ENODATA;
+        std::string compact = compact_path(bit->second);
+        size_t vlen = compact.size();
+        if (size == 0) return static_cast<int>(vlen);
+        if (size < vlen) return -ERANGE;
+        memcpy(buf, compact.c_str(), vlen);
+        return static_cast<int>(vlen);
+    }
+
+    // user.covered_at — full path of the file in the backup
+    // Format: backup_root + relative_path
+    // The relative path is the same as in the source filesystem (same tree structure)
+    if (strcmp(name, "user.covered_at") == 0) {
+        if (node.backup_id <= 0) return -ENODATA;
+        auto bit = g_fs->backup_paths.find(node.backup_id);
+        if (bit == g_fs->backup_paths.end()) return -ENODATA;
+        // The vpath within the FUSE matches the real path relative to source root.
+        // Assuming same tree structure in backup, construct: backup_root + vpath
+        std::string full = bit->second + std::string(path);
+        size_t vlen = full.size();
+        if (size == 0) return static_cast<int>(vlen);
+        if (size < vlen) return -ERANGE;
+        memcpy(buf, full.c_str(), vlen);
+        return static_cast<int>(vlen);
+    }
+
+    return -ENODATA;
 }
 
 // ------------------------------------------------------------------
@@ -289,10 +396,27 @@ int main(int argc, char* argv[])
     }
 
     CoverFs fs;
+    fs.src_db_folder = std::filesystem::absolute(src_folder).string();
     if (!build_fs(db, fs)) {
         std::cerr << "Error: failed to build filesystem from database.\n";
         return 1;
     }
+
+    // Load backup paths from backup_db table
+    {
+        sqlite3* raw = db.raw_db();
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "SELECT id, path FROM backup_db";
+        if (sqlite3_prepare_v2(raw, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                int id = sqlite3_column_int(stmt, 0);
+                const char* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                if (path) fs.backup_paths[id] = std::string(path);
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+
     g_fs = &fs;
 
     std::cerr << "Mounted " << fs.nodes.size() << " entries from " << src_folder

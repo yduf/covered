@@ -73,6 +73,7 @@ public:
     void migrate_backup_id_column();
     void migrate_backup_db_table();
     int  register_backup_db(const std::string& backup_path);
+    std::string get_backup_path(int backup_id);
     std::vector<DirEntry> get_all_dirs();
     std::vector<FileEntry> get_files_by_dir(uint64_t dir_inode);
     std::vector<FileEntry> get_all_files();

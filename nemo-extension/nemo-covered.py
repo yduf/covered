@@ -15,6 +15,10 @@ Color mapping:
   empty     → Aqua   folder (no emblem – dir contains no files at all)
   error     → Grey   folder + emblem-unreadable (crossed circle – access error)
 
+Columns:
+  Backup    → Compact backup path for covered files
+  Covered at → Full path of the file in the backup
+
 Install:
   sudo cp nemo-covered.py /usr/share/nemo-python/extensions/
   nemo -q && nemo
@@ -31,8 +35,10 @@ from gi.repository import GObject, GLib, Gio, Gtk, Nemo
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-XATTR_NAME   = b"user.covered"
-COLORS_D_DIR = "/usr/share/folder-color-switcher/colors.d"
+XATTR_NAME         = b"user.covered"
+XATTR_BACKUP       = b"user.covered_backup"
+XATTR_COVERED_AT   = b"user.covered_at"
+COLORS_D_DIR       = "/usr/share/folder-color-switcher/colors.d"
 
 # Map xattr value → emblem icon name (None = no emblem)
 EMBLEM_MAP = {
@@ -57,6 +63,9 @@ STATE_COLOR_MAP = {
 # Prevents the metadata-change → update_file_info → metadata-change loop.
 _icon_cache: dict = {}
 
+# Cache for xattr values to avoid repeated system calls
+_xattr_cache: dict = {}
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -64,6 +73,14 @@ def _get_covered_xattr(path: str):
     """Return the raw bytes value of user.covered, or None."""
     try:
         return os.getxattr(path, XATTR_NAME)
+    except (OSError, AttributeError):
+        return None
+
+
+def _get_xattr(path: str, name: bytes):
+    """Return the raw bytes value of the given xattr, or None."""
+    try:
+        return os.getxattr(path, name)
     except (OSError, AttributeError):
         return None
 
@@ -88,6 +105,7 @@ def _set_custom_icon(location: Gio.File, icon_uri) -> None:
 class CoveredExtension(
     GObject.GObject,
     Nemo.InfoProvider,
+    Nemo.ColumnProvider,
     Nemo.NameAndDescProvider,
 ):
     """
@@ -147,6 +165,23 @@ class CoveredExtension(
         self._resolved[cache_key] = uri
         return uri
 
+    # ── Nemo.ColumnProvider ─────────────────────────────────────────────────
+
+    def get_columns(self):
+        col_backup = Nemo.Column(
+            name="NemoCovered::backup",
+            attribute="covered_backup",
+            label="Backup",
+            description="Compact backup path where this file was found",
+        )
+        col_covered_at = Nemo.Column(
+            name="NemoCovered::covered_at",
+            attribute="covered_at",
+            label="Covered at",
+            description="Full path to the matched file in the backup",
+        )
+        return [col_backup, col_covered_at]
+
     # ── Nemo.InfoProvider ───────────────────────────────────────────────────
 
     def update_file_info(self, file):
@@ -174,6 +209,16 @@ class CoveredExtension(
             if _icon_cache.get(uri) != icon_uri:
                 _set_custom_icon(file.get_location(), icon_uri)
                 _icon_cache[uri] = icon_uri
+
+        # Custom columns: only for files (not directories) that are covered
+        if not file.is_directory() and val == b"covered":
+            backup = _get_xattr(path, XATTR_BACKUP)
+            if backup:
+                file.add_string_attribute("covered_backup", backup.decode("utf-8"))
+
+            covered_at = _get_xattr(path, XATTR_COVERED_AT)
+            if covered_at:
+                file.add_string_attribute("covered_at", covered_at.decode("utf-8"))
 
         return Nemo.OperationResult.COMPLETE
 
