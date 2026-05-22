@@ -11,6 +11,7 @@
 
 #include "db.hpp"
 #include "scanner.hpp"
+#include "blake3.h"
 
 static std::string make_db_folder(const std::string& path) {
     std::string sanitized = path;
@@ -36,22 +37,25 @@ static std::string make_db_folder(const std::string& path) {
 
 int main(int argc, char* argv[]) {
     bool force = false;
+    bool compute_hash = false;
     std::string folder;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-f" || arg == "--force") {
             force = true;
+        } else if (arg == "--compute-hash") {
+            compute_hash = true;
         } else if (folder.empty()) {
             folder = arg;
         } else {
-            std::cerr << "Usage: " << argv[0] << " [-f|--force] <folder>\n";
+            std::cerr << "Usage: " << argv[0] << " [-f|--force] [--compute-hash] <folder>\n";
             return 1;
         }
     }
 
     if (folder.empty()) {
-        std::cerr << "Usage: " << argv[0] << " [-f|--force] <folder>\n";
+        std::cerr << "Usage: " << argv[0] << " [-f|--force] [--compute-hash] <folder>\n";
         return 1;
     }
 
@@ -85,6 +89,28 @@ int main(int argc, char* argv[]) {
         std::filesystem::remove(db_name + "-wal");
     }
 
+    // Handle hash DB when --compute-hash is used
+    std::string hash_db_path = db_folder + "/hash.db";
+    std::unique_ptr<covered::HashDatabase> hash_db;
+
+    if (compute_hash) {
+        if (std::filesystem::exists(hash_db_path)) {
+            if (!force) {
+                std::cerr << "Error: hash database '" << hash_db_path << "' already exists. Use -f to overwrite.\n";
+                return 1;
+            }
+            std::filesystem::remove(hash_db_path);
+            std::filesystem::remove(hash_db_path + "-shm");
+            std::filesystem::remove(hash_db_path + "-wal");
+        }
+
+        hash_db = std::make_unique<covered::HashDatabase>(hash_db_path);
+        if (hash_db->has_error()) {
+            std::cerr << "Error opening hash database: " << hash_db->error_msg() << "\n";
+            return 1;
+        }
+    }
+
     covered::Database db(db_name);
     if (db.has_error()) {
         std::cerr << "Error opening database: " << db.error_msg() << "\n";
@@ -107,10 +133,14 @@ int main(int argc, char* argv[]) {
 
     db.begin_batch();
 
-    covered::Scanner scanner(db, static_cast<uint64_t>(st.st_dev));
+    covered::Scanner scanner(db, static_cast<uint64_t>(st.st_dev), hash_db.get());
     bool ok = scanner.scan(folder);
 
     db.commit_batch();
+
+    if (hash_db) {
+        hash_db->sync();
+    }
 
     if (!ok) {
         std::cerr << "Error scanning directory.\n";
@@ -131,6 +161,11 @@ int main(int argc, char* argv[]) {
         std::cout << " (" << scanner.skipped() << " skipped)";
     }
     std::cout << "\n";
+
+    if (compute_hash) {
+        std::cout << "Head hashes computed: " << scanner.head_hashes_computed() << "\n";
+        std::cout << "Full hashes computed: " << scanner.full_hashes_computed() << "\n";
+    }
 
     return 0;
 }

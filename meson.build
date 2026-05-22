@@ -19,7 +19,7 @@ scan_sources = files(
 )
 
 covered_scan_size_exe = executable('covered_scan_size', scan_sources,
-    dependencies : [sqlite3_dep],
+    dependencies : [sqlite3_dep, blake3_dep],
     install : true
 )
 

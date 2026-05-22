@@ -52,6 +52,18 @@ You can also Check xattr user.coveredd from command line:
 
 You can match one source to multiple different backup, the first match will be memorized. The backup DB are memorized as well in the source DB, so the nemo extension can help you find where is your backup.
 
+### Remote Drive
+
+If you are able to run the scanner on the remote host,
+i supports an optional `--compute-hash` flag that computes both
+`head_hash` and `full_hash` (blake3) for each file immediately during scanning,
+storing them in `hash.db`. 
+
+This is especially useful for remote filesystems
+(e.g. NFS, CIFS) where you want to minimize the number of passes over the data.
+Without this flag, hashes are lazily computed later during the match phase.
+
+- scan with hashes `./build/covered_scan_size --compute-hash /media/yves/Big`
 
 # Install
 
