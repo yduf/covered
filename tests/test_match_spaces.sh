@@ -35,11 +35,11 @@ printf "deep nested" > "$SRC/sub folder/nested dir/deep file.txt"
 printf "deep nested" > "$BKP/sub folder/nested dir/deep file.txt"
 
 # Scan both
-"$SCRIPT_DIR/build/covered_scan_size" "$SRC"
-"$SCRIPT_DIR/build/covered_scan_size" "$BKP"
+"$SCRIPT_DIR/../build/covered_scan_size" "$SRC"
+"$SCRIPT_DIR/../build/covered_scan_size" "$BKP"
 
 # Run match
-"$SCRIPT_DIR/build/covered_match" "covered_tmp_covered_match_test_src spaces" "covered_tmp_covered_match_test_bkp spaces"
+"$SCRIPT_DIR/../build/covered_match" "covered_tmp_covered_match_test_src spaces" "covered_tmp_covered_match_test_bkp spaces"
 
 # Verify results via sqlite3
 SRC_DB="covered_tmp_covered_match_test_src spaces/filesize.db"

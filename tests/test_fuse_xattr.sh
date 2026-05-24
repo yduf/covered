@@ -20,14 +20,14 @@ printf "deep covered file"         > "$SRC/sub/deep/deep.txt"
 printf "deep covered file"         > "$BKP/sub/deep/deep.txt"
 
 # Scan both
-"$SCRIPT_DIR/build/covered_scan_size" "$SRC"
-"$SCRIPT_DIR/build/covered_scan_size" "$BKP"
+"$SCRIPT_DIR/../build/covered_scan_size" "$SRC"
+"$SCRIPT_DIR/../build/covered_scan_size" "$BKP"
 
 # Match
-"$SCRIPT_DIR/build/covered_match" covered_tmp_covered_fuse_test_src covered_tmp_covered_fuse_test_bkp
+"$SCRIPT_DIR/../build/covered_match" covered_tmp_covered_fuse_test_src covered_tmp_covered_fuse_test_bkp
 
 # Run FUSE in background
-"$SCRIPT_DIR/build/cover_fuse" covered_tmp_covered_fuse_test_src "$MNT" -f &
+"$SCRIPT_DIR/../build/cover_fuse" covered_tmp_covered_fuse_test_src "$MNT" -f &
 FUSE_PID=$!
 
 # Wait for mount to be ready (poll until root xattr is readable)

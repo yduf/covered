@@ -26,11 +26,11 @@ printf "nested same" > "$SRC/sub/nested.txt"
 printf "nested same" > "$BKP/sub/nested.txt"
 
 # Scan both
-"$SCRIPT_DIR/build/covered_scan_size" "$SRC"
-"$SCRIPT_DIR/build/covered_scan_size" "$BKP"
+"$SCRIPT_DIR/../build/covered_scan_size" "$SRC"
+"$SCRIPT_DIR/../build/covered_scan_size" "$BKP"
 
 # Run match
-"$SCRIPT_DIR/build/covered_match" covered_tmp_covered_match_test_src covered_tmp_covered_match_test_bkp
+"$SCRIPT_DIR/../build/covered_match" covered_tmp_covered_match_test_src covered_tmp_covered_match_test_bkp
 
 # Verify results via sqlite3
 RESULT=$(sqlite3 covered_tmp_covered_match_test_src/filesize.db "SELECT files.name, covered FROM files JOIN dirs ON files.dir_inode = dirs.inode ORDER BY files.name;")
