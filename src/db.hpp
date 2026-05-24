@@ -49,8 +49,6 @@ public:
     Database(const Database&) = delete;
     Database& operator=(const Database&) = delete;
 
-    void set_device(uint64_t device);
-    void set_root_path(const std::string& path);
     std::optional<std::string> get_root_path();
 
     void begin_batch();
@@ -72,6 +70,7 @@ public:
     void migrate_error_columns();
     void migrate_backup_id_column();
     void migrate_backup_db_table();
+    void migrate_drop_meta_table();
     int  register_backup_db(const std::string& backup_path);
     std::string get_backup_path(int backup_id);
     std::vector<DirEntry> get_all_dirs();
@@ -107,6 +106,8 @@ private:
 
     bool error_ = false;
     std::string error_msg_;
+    std::string db_folder_;
+    std::optional<std::string> read_config_json() const;
     std::mutex mutex_;
 };
 

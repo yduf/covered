@@ -254,26 +254,16 @@ For each scanned filesystem folder, a dedicated output directory is created
 
 | File | Purpose |
 |---|---|
-| `config.json` | Small JSON file with the scanned root path: `{"root":"/absolute/path"}`. Useful for external scripts and for reconstructing filesystem paths during matching. |
+| `config.json` | Small JSON file with the scanned root path and device: `{"root":"/absolute/path", "device":1234}`. Useful for external scripts and for reconstructing filesystem paths during matching. |
 | `filesize.db` | SQLite database containing the directory tree, file metadata, and the final `covered` flag. |
 | `hash.db` | SQLite database caching blake3 hashes per inode (head hash and full hash). Kept separate so the match phase can be re-run or resumed incrementally. |
 
 ### `config.json`
 ```json
-{"root":"/home/yves"}
+{"root":"/home/yves","device":2049}
 ```
 
 ### `filesize.db` tables
-
-#### `meta`
-| Column | Type | Description |
-|---|---|---|
-| `key` | TEXT PRIMARY KEY | Metadata key |
-| `value` | INTEGER | Metadata value |
-
-Rows:
-- `device` → the `st_dev` of the scanned filesystem (prevents crossing mount points)
-- `root_path` → absolute path of the scanned root directory
 
 #### `dirs`
 | Column | Type | Description |

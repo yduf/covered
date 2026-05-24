@@ -119,16 +119,14 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    db.set_device(static_cast<uint64_t>(st.st_dev));
-
     // Store absolute root path for path reconstruction during match
     std::string abs_path = std::filesystem::absolute(folder).string();
-    db.set_root_path(abs_path);
 
     // Write config.json using nlohmann::json
     {
         nlohmann::json config;
         config["root"] = abs_path;
+        config["device"] = static_cast<uint64_t>(st.st_dev);
         std::ofstream cfg(db_folder + "/config.json");
         if (cfg) {
             cfg << config.dump() << "\n";

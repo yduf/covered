@@ -19,6 +19,9 @@
 
 #include "db.hpp"
 
+#include <fstream>
+#include <nlohmann/json.hpp>
+
 // ------------------------------------------------------------------
 // In-memory filesystem node
 // ------------------------------------------------------------------
@@ -211,17 +214,20 @@ static std::string build_backup_path(uint64_t backup_inode, const std::string& b
         if (stmt) sqlite3_finalize(stmt);
     }
 
-    // Also get backup root path
+    // Also get backup root path from config.json
     std::string root_path;
     {
-        sqlite3_stmt* stmt = nullptr;
-        const char* sql = "SELECT value FROM meta WHERE key = 'root_path'";
-        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-            if (sqlite3_step(stmt) == SQLITE_ROW) {
-                const char* val = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-                if (val) root_path = val;
+        std::string config_path = bkp_db_folder + "/config.json";
+        std::ifstream f(config_path);
+        if (f) {
+            try {
+                nlohmann::json config = nlohmann::json::parse(f);
+                if (config.contains("root") && config["root"].is_string()) {
+                    root_path = config["root"].get<std::string>();
+                }
+            } catch (const nlohmann::json::exception&) {
+                // fall through
             }
-            sqlite3_finalize(stmt);
         }
     }
     sqlite3_close(db);

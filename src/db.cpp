@@ -4,6 +4,10 @@
 #include <cstring>
 #include <functional>
 #include <algorithm>
+#include <fstream>
+#include <filesystem>
+
+#include <nlohmann/json.hpp>
 
 namespace covered {
 
@@ -28,6 +32,9 @@ Database::Database(const std::string& path) {
         return;
     }
 
+    // Store the DB folder path (strip "/filesize.db" suffix)
+    db_folder_ = std::filesystem::path(path).parent_path().string();
+
     // Speed / reliability tuning
     exec_sql(db_, "PRAGMA journal_mode=WAL;");
     exec_sql(db_, "PRAGMA synchronous=NORMAL;");
@@ -36,12 +43,8 @@ Database::Database(const std::string& path) {
     exec_sql(db_, "PRAGMA mmap_size=30000000000;");
 
     // Schema (CREATE TABLE IF NOT EXISTS — safe for new DBs)
+    // Note: meta table has been removed (info stored in config.json instead).
     const char* schema = R"(
-        CREATE TABLE IF NOT EXISTS meta (
-            key   TEXT PRIMARY KEY,
-            value INTEGER NOT NULL
-        ) WITHOUT ROWID;
-
         CREATE TABLE IF NOT EXISTS dirs (
             inode        INTEGER NOT NULL,
             parent_inode INTEGER,
@@ -83,6 +86,7 @@ Database::Database(const std::string& path) {
     migrate_error_columns();
     migrate_backup_id_column();
     migrate_backup_db_table();
+    migrate_drop_meta_table();
 
     // Prepared statements for bulk insert
     const char* sql_dir = "INSERT INTO dirs (inode, parent_inode, name, error) VALUES (?, ?, ?, ?)";
@@ -108,43 +112,24 @@ Database::~Database() {
     if (db_)        sqlite3_close(db_);
 }
 
-void Database::set_device(uint64_t device) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    sqlite3_stmt* stmt = nullptr;
-    const char* sql = "INSERT INTO meta (key, value) VALUES ('device', ?)";
-    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
-    if (rc == SQLITE_OK) {
-        sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(device));
-        sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
+std::optional<std::string> Database::read_config_json() const {
+    std::string config_path = db_folder_ + "/config.json";
+    std::ifstream f(config_path);
+    if (!f) return std::nullopt;
+    try {
+        nlohmann::json config = nlohmann::json::parse(f);
+        if (config.contains("root") && config["root"].is_string()) {
+            return config["root"].get<std::string>();
+        }
+    } catch (const nlohmann::json::exception&) {
+        // fall through
     }
-}
-
-void Database::set_root_path(const std::string& path) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    sqlite3_stmt* stmt = nullptr;
-    const char* sql = "INSERT INTO meta (key, value) VALUES ('root_path', ?)";
-    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
-    if (rc == SQLITE_OK) {
-        sqlite3_bind_text(stmt, 1, path.c_str(), static_cast<int>(path.size()), SQLITE_STATIC);
-        sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
-    }
+    return std::nullopt;
 }
 
 std::optional<std::string> Database::get_root_path() {
     std::lock_guard<std::mutex> lock(mutex_);
-    sqlite3_stmt* stmt = nullptr;
-    const char* sql = "SELECT value FROM meta WHERE key = 'root_path'";
-    std::optional<std::string> result;
-    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-        if (sqlite3_step(stmt) == SQLITE_ROW) {
-            const char* text = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-            if (text) result = std::string(text);
-        }
-        sqlite3_finalize(stmt);
-    }
-    return result;
+    return read_config_json();
 }
 
 uint64_t Database::count_files() {
@@ -252,6 +237,39 @@ void Database::migrate_backup_db_table() {
                    "  id   INTEGER PRIMARY KEY AUTOINCREMENT,"
                    "  path TEXT NOT NULL UNIQUE"
                    ");");
+}
+
+void Database::migrate_drop_meta_table() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Safe to drop — meta data is now stored in config.json.
+    // Before dropping, migrate root_path to config.json if not already present.
+    {
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "SELECT value FROM meta WHERE key = 'root_path'";
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                const char* text = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+                if (text) {
+                    std::string root_path(text);
+                    // Check if config.json already has root
+                    auto existing = read_config_json();
+                    if (!existing.has_value()) {
+                        // Write to config.json
+                        std::string config_path = db_folder_ + "/config.json";
+                        nlohmann::json config;
+                        config["root"] = root_path;
+                        config["device"] = 0; // device unknown for old DBs
+                        std::ofstream cfg(config_path);
+                        if (cfg) {
+                            cfg << config.dump() << "\n";
+                        }
+                    }
+                }
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+    exec_sql(db_, "DROP TABLE IF EXISTS meta;");
 }
 
 int Database::register_backup_db(const std::string& backup_path) {
