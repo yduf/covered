@@ -54,6 +54,14 @@ if fuse3_dep.found()
         dependencies : [sqlite3_dep, fuse3_dep],
         install : true
     )
+
+    # FUSE xattr test
+    test_fuse_xattr_script = find_program('tests/test_fuse_xattr.sh')
+    test('fuse_xattr', test_fuse_xattr_script,
+        depends : [covered_scan_size_exe, covered_match_exe, cover_fuse_exe],
+        workdir : meson.current_source_dir(),
+        timeout : 30
+    )
 else
     warning('libfuse3-dev not found – cover_fuse will not be built. Install with: sudo apt install libfuse3-dev')
 endif
@@ -65,16 +73,16 @@ install_data(
     rename : 'nemo-covered.py',
 )
 
-test_script = find_program('test_match.sh')
-test_script_spaces = find_program('test_match_spaces.sh')
+test_match_script = find_program('tests/test_match.sh')
+test_match_spaces_script = find_program('tests/test_match_spaces.sh')
 
-test('match_end_to_end', test_script,
+test('match_end_to_end', test_match_script,
     depends : [covered_scan_size_exe, covered_match_exe],
     workdir : meson.current_source_dir(),
     timeout : 60
 )
 
-test('match_end_to_end_spaces', test_script_spaces,
+test('match_end_to_end_spaces', test_match_spaces_script,
     depends : [covered_scan_size_exe, covered_match_exe],
     workdir : meson.current_source_dir(),
     timeout : 60
