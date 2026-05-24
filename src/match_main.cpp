@@ -5,22 +5,21 @@
 #include <cerrno>
 #include <cstring>
 
+#include <nlohmann/json.hpp>
+
 #include "db.hpp"
 #include "matcher.hpp"
 
 static std::string read_root_from_json(const std::string& path) {
     std::ifstream f(path);
     if (!f) return "";
-    std::string line;
-    if (std::getline(f, line)) {
-        auto pos = line.find("\"root\":\"");
-        if (pos != std::string::npos) {
-            pos += 8;
-            auto end = line.find("\"", pos);
-            if (end != std::string::npos) {
-                return line.substr(pos, end - pos);
-            }
+    try {
+        nlohmann::json config = nlohmann::json::parse(f);
+        if (config.contains("root") && config["root"].is_string()) {
+            return config["root"].get<std::string>();
         }
+    } catch (const nlohmann::json::exception&) {
+        // fall through
     }
     return "";
 }

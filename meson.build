@@ -3,6 +3,12 @@ project('covered', 'cpp',
     default_options : ['cpp_std=c++17', 'warning_level=3']
 )
 
+nlohmann_json_dep = dependency('nlohmann_json', required: false)
+if not nlohmann_json_dep.found()
+    nlohmann_json_proj = subproject('nlohmann_json')
+    nlohmann_json_dep = nlohmann_json_proj.get_variable('nlohmann_json_dep')
+endif
+
 sqlite3_dep = dependency('sqlite3')
 blake3_dep = dependency('blake3', required: false)
 if not blake3_dep.found()
@@ -19,7 +25,7 @@ scan_sources = files(
 )
 
 covered_scan_size_exe = executable('covered_scan_size', scan_sources,
-    dependencies : [sqlite3_dep, blake3_dep],
+    dependencies : [nlohmann_json_dep, sqlite3_dep, blake3_dep],
     install : true
 )
 
@@ -30,7 +36,7 @@ match_sources = files(
 )
 
 covered_match_exe = executable('covered_match', match_sources,
-    dependencies : [sqlite3_dep, blake3_dep],
+    dependencies : [nlohmann_json_dep, sqlite3_dep, blake3_dep],
     install : true
 )
 
@@ -40,7 +46,7 @@ report_sources = files(
 )
 
 cover_report_exe = executable('cover_report', report_sources,
-    dependencies : [sqlite3_dep],
+    dependencies : [nlohmann_json_dep, sqlite3_dep],
     install : true
 )
 
@@ -51,7 +57,7 @@ if fuse3_dep.found()
     )
 
     cover_fuse_exe = executable('cover_fuse', fuse_sources,
-        dependencies : [sqlite3_dep, fuse3_dep],
+        dependencies : [nlohmann_json_dep, sqlite3_dep, fuse3_dep],
         install : true
     )
 

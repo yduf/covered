@@ -9,6 +9,8 @@
 #include <cstring>
 #include <cerrno>
 
+#include <nlohmann/json.hpp>
+
 #include "db.hpp"
 #include "scanner.hpp"
 #include "blake3.h"
@@ -123,11 +125,13 @@ int main(int argc, char* argv[]) {
     std::string abs_path = std::filesystem::absolute(folder).string();
     db.set_root_path(abs_path);
 
-    // Also write a simple config.json for easy external access
+    // Write config.json using nlohmann::json
     {
+        nlohmann::json config;
+        config["root"] = abs_path;
         std::ofstream cfg(db_folder + "/config.json");
         if (cfg) {
-            cfg << "{\"root\":\"" << abs_path << "\"}\n";
+            cfg << config.dump() << "\n";
         }
     }
 
