@@ -163,6 +163,8 @@ public:
     bool has_error() const { return error_; }
     const std::string& error_msg() const { return error_msg_; }
 
+    std::string resolve_covered_at(const FsNode& node);
+
 private:
     void load_backup_paths()
     {
@@ -321,10 +323,10 @@ static std::string derive_backup_db_folder(const std::string& bkp_root_path, con
 // Helper: find backup file path from source inode using hash lookup
 // ------------------------------------------------------------------
 
-static std::string resolve_covered_at(CoverFs* fs, uint64_t src_inode, int backup_id)
+std::string CoverFs::resolve_covered_at(const FsNode& node)
 {
     // 1. Get source file's full_hash from source hash.db
-    std::string src_hash_path = fs->src_db_folder + "/hash.db";
+    std::string src_hash_path = src_db_folder + "/hash.db";
     std::optional<std::vector<uint8_t>> src_full_hash;
 
     {
@@ -335,7 +337,7 @@ static std::string resolve_covered_at(CoverFs* fs, uint64_t src_inode, int backu
         sqlite3_stmt* stmt = nullptr;
         const char* sql = "SELECT full_hash FROM hashes WHERE inode = ?";
         if (sqlite3_prepare_v2(hdb, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-            sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(src_inode));
+            sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(node.inode));
             if (sqlite3_step(stmt) == SQLITE_ROW) {
                 const void* blob = sqlite3_column_blob(stmt, 0);
                 int len = sqlite3_column_bytes(stmt, 0);
@@ -351,18 +353,18 @@ static std::string resolve_covered_at(CoverFs* fs, uint64_t src_inode, int backu
     }
 
     if (!src_full_hash.has_value() || src_full_hash->empty()) {
-        fprintf(stderr, "resolve_covered_at: no full_hash for src_inode=%lu\n", (unsigned long)src_inode);
+        fprintf(stderr, "resolve_covered_at: no full_hash for src_inode=%lu\n", (unsigned long)node.inode);
         return "";
     }
 
     // 2. Get backup db_folder path derived on-the-fly
-    auto it_path = fs->backup_paths.find(backup_id);
-    if (it_path == fs->backup_paths.end()) {
-        fprintf(stderr, "resolve_covered_at: backup_paths not found for id=%d\n", backup_id);
+    auto it_path = backup_paths.find(node.backup_id);
+    if (it_path == backup_paths.end()) {
+        fprintf(stderr, "resolve_covered_at: backup_paths not found for id=%d\n", node.backup_id);
         return "";
     }
     std::string bkp_root = it_path->second;
-    std::string bkp_db_folder = derive_backup_db_folder(bkp_root, fs->src_db_folder);
+    std::string bkp_db_folder = derive_backup_db_folder(bkp_root, src_db_folder);
     fprintf(stderr, "resolve_covered_at: bkp_root='%s' bkp_db_folder='%s'\n", bkp_root.c_str(), bkp_db_folder.c_str());
 
     // 3. Find matching inode in backup hash.db via indexed full_hash
@@ -567,7 +569,7 @@ static int cfs_getxattr(const char* path, const char* name, char* buf, size_t si
     // The relative path is the same as in the source filesystem (same tree structure)
     if (strcmp(name, "user.covered_at") == 0) {
         if (node.backup_id <= 0 || node.inode == 0) return -ENODATA;
-        std::string full = resolve_covered_at(fs, node.inode, node.backup_id);
+        std::string full = fs->resolve_covered_at(node);
         if (full.empty()) return -ENODATA;
         size_t vlen = full.size();
         if (size == 0) return static_cast<int>(vlen);
