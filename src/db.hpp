@@ -25,8 +25,8 @@ struct DirEntry {
     uint64_t inode;
     uint64_t parent_inode;  // 0 for root (no dir has inode 0)
     std::string name;
-    int covered = 0; // CoveredState, used for reporting
-    int error   = 0; // 1 if directory could not be scanned (permission etc.)
+    int covered = 0;        // CoveredState, used for reporting
+    int error   = 0;        // 1 if directory could not be scanned (permission etc.)
 };
 
 struct FileEntry {
@@ -34,9 +34,9 @@ struct FileEntry {
     std::string name;
     uint64_t inode;
     int64_t  size;
-    int64_t  mtime;  // seconds since epoch
-    int      covered;   // used for reporting at the end
-    int      error;     // 1 if file could not be accessed (permission etc.)
+    int64_t  mtime;         // seconds since epoch
+    int      covered;       // used for reporting at the end
+    int      error;         // 1 if file could not be accessed (permission etc.)
     int      backup_id = 0; // id of the backup_db that matched this file (0 = none)
 };
 

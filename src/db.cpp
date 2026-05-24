@@ -657,6 +657,9 @@ HashDatabase::HashDatabase(const std::string& path) {
         return;
     }
 
+    // Index on full_hash for fast reverse lookup (find file by hash)
+    exec_sql(db_, "CREATE INDEX IF NOT EXISTS idx_hashes_full_hash ON hashes(full_hash);");
+
     const char* sql_head = "INSERT INTO hashes (inode, head_hash) VALUES (?, ?) ON CONFLICT(inode) DO UPDATE SET head_hash = excluded.head_hash";
     rc = sqlite3_prepare_v2(db_, sql_head, -1, &stmt_set_head_, nullptr);
     if (rc != SQLITE_OK) {

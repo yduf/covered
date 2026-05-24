@@ -31,6 +31,7 @@ struct FsNode {
     int         error;      // 1 if file/dir had an access error
     int64_t     size;       // files only
     int64_t     mtime;      // files only
+    uint64_t    inode;      // files only: inode for hash lookup
     int         backup_id;  // files only: id of the backup_db that matched this file (0 = none)
     std::string real_path;  // files only: absolute path on real fs for read()
     std::vector<std::string> children; // basenames of direct children (dirs+files)
@@ -42,7 +43,7 @@ struct FsNode {
 
 struct CoverFs {
     std::string root_path;
-    std::string src_db_folder; // path to the source DB folder
+    std::string src_db_folder; // path to the source DB folder (for hash.db)
     std::unordered_map<int, std::string> backup_paths; // backup_id -> absolute backup root path
     std::unordered_map<std::string, FsNode> nodes; // vpath -> FsNode
 };
@@ -118,6 +119,7 @@ static bool build_fs(covered::Database& db, CoverFs& fs)
         node.error     = d.error;
         node.size      = 0;
         node.mtime     = 0;
+        node.inode     = 0;
         node.backup_id = 0;
         fs.nodes[vpath] = node;
     }
@@ -138,6 +140,7 @@ static bool build_fs(covered::Database& db, CoverFs& fs)
         node.error     = f.error;
         node.size      = f.size;
         node.mtime     = f.mtime;
+        node.inode     = f.inode;
         node.backup_id = f.backup_id;
         // Reconstruct real path from root_path
         node.real_path = fs.root_path + vpath;
@@ -148,14 +151,8 @@ static bool build_fs(covered::Database& db, CoverFs& fs)
         dir_node.children.push_back(f.name);
     }
 
-    // Register child directories
-    std::unordered_map<uint64_t, std::vector<uint64_t>> children_map;
     for (const auto& d : dirs) {
-        if (d.parent_inode != 0)
-            children_map[d.parent_inode].push_back(d.inode);
-    }
-    for (const auto& d : dirs) {
-        if (d.parent_inode == 0) continue; // root has no parent entry
+        if (d.parent_inode == 0) continue;
         std::string parent_vpath = dir_paths[d.parent_inode];
         auto pit = fs.nodes.find(parent_vpath);
         if (pit != fs.nodes.end()) {
@@ -163,6 +160,201 @@ static bool build_fs(covered::Database& db, CoverFs& fs)
         }
     }
     return true;
+}
+
+// ------------------------------------------------------------------
+// Helper: build a path from inode using a filesize.db's dirs table
+// ------------------------------------------------------------------
+
+static std::string build_backup_path(uint64_t backup_inode, const std::string& bkp_db_folder)
+{
+    std::string db_path = bkp_db_folder + "/filesize.db";
+    sqlite3* db = nullptr;
+    if (sqlite3_open(db_path.c_str(), &db) != SQLITE_OK) return "";
+    sqlite3_exec(db, "PRAGMA journal_mode=WAL;", nullptr, nullptr, nullptr);
+
+    std::vector<std::string> parts;
+    {
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "SELECT parent_inode, name FROM dirs WHERE inode = ?";
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(backup_inode));
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                const char* name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                if (name) parts.push_back(name);
+                uint64_t parent = sqlite3_column_type(stmt, 0) == SQLITE_NULL
+                                      ? 0
+                                      : static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
+                sqlite3_finalize(stmt);
+                stmt = nullptr;
+
+                while (parent != 0) {
+                    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+                        sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(parent));
+                        if (sqlite3_step(stmt) == SQLITE_ROW) {
+                            const char* n = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                            if (n) parts.push_back(n);
+                            parent = sqlite3_column_type(stmt, 0) == SQLITE_NULL
+                                         ? 0
+                                         : static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
+                        } else {
+                            parent = 0;
+                        }
+                        sqlite3_finalize(stmt);
+                        stmt = nullptr;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        if (stmt) sqlite3_finalize(stmt);
+    }
+
+    // Also get backup root path
+    std::string root_path;
+    {
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "SELECT value FROM meta WHERE key = 'root_path'";
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                const char* val = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+                if (val) root_path = val;
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+    sqlite3_close(db);
+
+    if (parts.empty()) return "";
+
+    std::string result = root_path;
+    if (!result.empty() && result.back() != '/') result += '/';
+    for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
+        result += *it;
+        if (it + 1 != parts.rend()) result += '/';
+    }
+    return result;
+}
+
+// ------------------------------------------------------------------
+// Helper: derive the DB folder path from backup root path
+// ------------------------------------------------------------------
+
+static std::string derive_backup_db_folder(const std::string& bkp_root_path, const std::string& src_db_folder)
+{
+    std::string sanitized = bkp_root_path;
+    // Remove trailing slashes
+    while (!sanitized.empty() && sanitized.back() == '/') {
+        sanitized.pop_back();
+    }
+    // Remove leading slash
+    if (!sanitized.empty() && sanitized.front() == '/') {
+        sanitized = sanitized.substr(1);
+    }
+    // Replace slashes with underscores
+    for (char& c : sanitized) {
+        if (c == '/') {
+            c = '_';
+        }
+    }
+    if (sanitized.empty()) {
+        sanitized = "root";
+    }
+    std::string db_folder_name = "covered_" + sanitized;
+
+    // Get sibling of source DB folder
+    std::filesystem::path src_path(src_db_folder);
+    std::filesystem::path parent = src_path.parent_path();
+    return (parent / db_folder_name).string();
+}
+
+// ------------------------------------------------------------------
+// Helper: find backup file path from source inode using hash lookup
+// ------------------------------------------------------------------
+
+static std::string resolve_covered_at(uint64_t src_inode, int backup_id)
+{
+    // 1. Get source file's full_hash from source hash.db
+    std::string src_hash_path = g_fs->src_db_folder + "/hash.db";
+    std::optional<std::vector<uint8_t>> src_full_hash;
+
+    {
+        sqlite3* hdb = nullptr;
+        if (sqlite3_open(src_hash_path.c_str(), &hdb) != SQLITE_OK) return "";
+        sqlite3_exec(hdb, "PRAGMA journal_mode=WAL;", nullptr, nullptr, nullptr);
+
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "SELECT full_hash FROM hashes WHERE inode = ?";
+        if (sqlite3_prepare_v2(hdb, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(src_inode));
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                const void* blob = sqlite3_column_blob(stmt, 0);
+                int len = sqlite3_column_bytes(stmt, 0);
+                if (blob && len > 0) {
+                    src_full_hash = std::vector<uint8_t>(
+                        static_cast<const uint8_t*>(blob),
+                        static_cast<const uint8_t*>(blob) + len);
+                }
+            }
+            sqlite3_finalize(stmt);
+        }
+        sqlite3_close(hdb);
+    }
+
+    if (!src_full_hash.has_value() || src_full_hash->empty()) {
+        fprintf(stderr, "resolve_covered_at: no full_hash for src_inode=%lu\n", (unsigned long)src_inode);
+        return "";
+    }
+
+    // 2. Get backup db_folder path derived on-the-fly
+    auto it_path = g_fs->backup_paths.find(backup_id);
+    if (it_path == g_fs->backup_paths.end()) {
+        fprintf(stderr, "resolve_covered_at: backup_paths not found for id=%d\n", backup_id);
+        return "";
+    }
+    std::string bkp_root = it_path->second;
+    std::string bkp_db_folder = derive_backup_db_folder(bkp_root, g_fs->src_db_folder);
+    fprintf(stderr, "resolve_covered_at: bkp_root='%s' bkp_db_folder='%s'\n", bkp_root.c_str(), bkp_db_folder.c_str());
+
+    // 3. Find matching inode in backup hash.db via indexed full_hash
+    std::string bkp_hash_path = bkp_db_folder + "/hash.db";
+    uint64_t bkp_inode = 0;
+    fprintf(stderr, "resolve_covered_at: opening bkp_hash_path='%s'\n", bkp_hash_path.c_str());
+
+    {
+        sqlite3* bdb = nullptr;
+        if (sqlite3_open(bkp_hash_path.c_str(), &bdb) != SQLITE_OK) {
+            fprintf(stderr, "resolve_covered_at: failed to open bkp hash.db\n");
+            return "";
+        }
+        sqlite3_exec(bdb, "PRAGMA journal_mode=WAL;", nullptr, nullptr, nullptr);
+
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "SELECT inode FROM hashes WHERE full_hash = ? LIMIT 1";
+        if (sqlite3_prepare_v2(bdb, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_blob(stmt, 1, src_full_hash->data(),
+                              static_cast<int>(src_full_hash->size()), SQLITE_STATIC);
+            int rc = sqlite3_step(stmt);
+            fprintf(stderr, "resolve_covered_at: hash lookup rc=%d\n", rc);
+            if (rc == SQLITE_ROW) {
+                bkp_inode = static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
+                fprintf(stderr, "resolve_covered_at: found bkp_inode=%lu\n", (unsigned long)bkp_inode);
+            }
+            sqlite3_finalize(stmt);
+        }
+        sqlite3_close(bdb);
+    }
+
+    if (bkp_inode == 0) {
+        fprintf(stderr, "resolve_covered_at: bkp_inode not found\n");
+        return "";
+    }
+
+    // 4. Build full path from backup filesize.db
+    std::string result = build_backup_path(bkp_inode, bkp_db_folder);
+    fprintf(stderr, "resolve_covered_at: result='%s'\n", result.c_str());
+    return result;
 }
 
 // ------------------------------------------------------------------
@@ -174,7 +366,6 @@ static int cfs_getattr(const char* path, struct stat* st, struct fuse_file_info*
     memset(st, 0, sizeof(*st));
     auto it = g_fs->nodes.find(path);
     if (it == g_fs->nodes.end()) return -ENOENT;
-
     const FsNode& node = it->second;
     if (node.kind == NodeKind::Dir) {
         st->st_mode  = S_IFDIR | 0755;
@@ -196,10 +387,8 @@ static int cfs_readdir(const char* path, void* buf, fuse_fill_dir_t filler,
     auto it = g_fs->nodes.find(path);
     if (it == g_fs->nodes.end()) return -ENOENT;
     if (it->second.kind != NodeKind::Dir) return -ENOTDIR;
-
     filler(buf, ".",  nullptr, 0, FUSE_FILL_DIR_PLUS);
     filler(buf, "..", nullptr, 0, FUSE_FILL_DIR_PLUS);
-
     for (const auto& child_name : it->second.children) {
         filler(buf, child_name.c_str(), nullptr, 0, FUSE_FILL_DIR_PLUS);
     }
@@ -212,7 +401,7 @@ static int cfs_open(const char* path, struct fuse_file_info* fi)
     if (it == g_fs->nodes.end()) return -ENOENT;
     if (it->second.kind != NodeKind::File) return -EISDIR;
     if ((fi->flags & O_ACCMODE) != O_RDONLY) return -EACCES;
-    if (it->second.error) return -EACCES;  // cannot read files that had errors
+    if (it->second.error) return -EACCES;
     return 0;
 }
 
@@ -222,13 +411,10 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
     auto it = g_fs->nodes.find(path);
     if (it == g_fs->nodes.end()) return -ENOENT;
     if (it->second.kind != NodeKind::File) return -EISDIR;
-
     const FsNode& node = it->second;
     if (node.error || node.real_path.empty()) return -EACCES;
-
     int fd = ::open(node.real_path.c_str(), O_RDONLY);
     if (fd < 0) return -errno;
-
     int res = static_cast<int>(::pread(fd, buf, size, offset));
     if (res < 0) res = -errno;
     ::close(fd);
@@ -239,15 +425,11 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
 // Extended attributes
 // ------------------------------------------------------------------
 
-// Build the compact path: every intermediate folder reduced to first char,
-// last folder stays intact.  e.g. /media/yves/Big -> /m/y/Big
 static std::string compact_path(const std::string& path)
 {
     if (path.empty()) return "";
-    // Split by '/'
     std::vector<std::string> parts;
-    size_t start = 0;
-    if (path[0] == '/') start = 1; // skip leading slash
+    size_t start = (path[0] == '/') ? 1 : 0;
     std::string current;
     for (size_t i = start; i <= path.size(); ++i) {
         if (i == path.size() || path[i] == '/') {
@@ -270,29 +452,17 @@ static std::string compact_path(const std::string& path)
 static int cfs_listxattr(const char* path, char* buf, size_t size)
 {
     auto it = g_fs->nodes.find(path);
-    if (it == g_fs->nodes.end()) {
-        fprintf(stderr, "cfs_listxattr: ENOENT for path='%s'\n", path);
-        return -ENOENT;
-    }
+    if (it == g_fs->nodes.end()) return -ENOENT;
 
     const FsNode& node = it->second;
-    fprintf(stderr, "cfs_listxattr: path='%s' kind=%s covered=%d backup_id=%d\n",
-            path,
-            node.kind == NodeKind::Dir ? "Dir" : "File",
-            node.covered, node.backup_id);
-
-    // Simply use the old working implementation, plus extra names
-    size_t needed = sizeof("user.covered"); // includes null
+    size_t needed = sizeof("user.covered");
     bool add_extra = false;
-
-    // On files that are covered with a backup, expose two more xattrs
     if (node.kind == NodeKind::File
         && node.covered == static_cast<int>(covered::CoveredState::Covered)
         && node.backup_id > 0) {
         needed += sizeof("user.covered_backup") + sizeof("user.covered_at");
         add_extra = true;
     }
-
     if (size == 0) return static_cast<int>(needed);
     if (size < needed) return -ERANGE;
 
@@ -325,16 +495,7 @@ static int cfs_getxattr(const char* path, const char* name, char* buf, size_t si
         return static_cast<int>(vlen);
     }
 
-    // user.covered_src_db — path to the source DB folder (root only)
-    if (strcmp(name, "user.covered_src_db") == 0) {
-        size_t vlen = g_fs->src_db_folder.size();
-        if (size == 0) return static_cast<int>(vlen);
-        if (size < vlen) return -ERANGE;
-        memcpy(buf, g_fs->src_db_folder.c_str(), vlen);
-        return static_cast<int>(vlen);
-    }
-
-    // user.covered_backup — compact form of the backup root path
+    // user.covered_backup — compact form of the backup DB root path
     if (strcmp(name, "user.covered_backup") == 0) {
         if (node.backup_id <= 0) return -ENODATA;
         auto bit = g_fs->backup_paths.find(node.backup_id);
@@ -351,12 +512,9 @@ static int cfs_getxattr(const char* path, const char* name, char* buf, size_t si
     // Format: backup_root + relative_path
     // The relative path is the same as in the source filesystem (same tree structure)
     if (strcmp(name, "user.covered_at") == 0) {
-        if (node.backup_id <= 0) return -ENODATA;
-        auto bit = g_fs->backup_paths.find(node.backup_id);
-        if (bit == g_fs->backup_paths.end()) return -ENODATA;
-        // The vpath within the FUSE matches the real path relative to source root.
-        // Assuming same tree structure in backup, construct: backup_root + vpath
-        std::string full = bit->second + std::string(path);
+        if (node.backup_id <= 0 || node.inode == 0) return -ENODATA;
+        std::string full = resolve_covered_at(node.inode, node.backup_id);
+        if (full.empty()) return -ENODATA;
         size_t vlen = full.size();
         if (size == 0) return static_cast<int>(vlen);
         if (size < vlen) return -ERANGE;
@@ -410,8 +568,8 @@ int main(int argc, char* argv[])
         if (sqlite3_prepare_v2(raw, sql, -1, &stmt, nullptr) == SQLITE_OK) {
             while (sqlite3_step(stmt) == SQLITE_ROW) {
                 int id = sqlite3_column_int(stmt, 0);
-                const char* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-                if (path) fs.backup_paths[id] = std::string(path);
+                const char* p = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                if (p) fs.backup_paths[id] = p;
             }
             sqlite3_finalize(stmt);
         }
@@ -422,16 +580,10 @@ int main(int argc, char* argv[])
     std::cerr << "Mounted " << fs.nodes.size() << " entries from " << src_folder
               << " at " << mount_point << "\n";
 
-    // Build fuse argc/argv: [progname, mount_point, extra_opts...]
     std::vector<std::string> fuse_args_str;
     fuse_args_str.push_back(argv[0]);
     fuse_args_str.push_back(mount_point);
-    // Forward any extra fuse options (e.g. -d, -f, -s)
-    for (int i = 3; i < argc; ++i) {
-        fuse_args_str.push_back(argv[i]);
-    }
-    // Default: run in foreground (-f) so the user can ctrl-c to unmount
-    // Only add -f if not already specified
+    for (int i = 3; i < argc; ++i) fuse_args_str.push_back(argv[i]);
     bool has_fg = false;
     for (int i = 3; i < argc; ++i)
         if (std::string(argv[i]) == "-f" || std::string(argv[i]) == "-d") has_fg = true;
@@ -440,7 +592,6 @@ int main(int argc, char* argv[])
     std::vector<char*> fuse_argv;
     for (auto& s : fuse_args_str) fuse_argv.push_back(const_cast<char*>(s.c_str()));
 
-    // Build ops table at runtime to avoid C++20 designated initializer issues
     struct fuse_operations ops;
     memset(&ops, 0, sizeof(ops));
     ops.getattr   = cfs_getattr;
@@ -450,6 +601,5 @@ int main(int argc, char* argv[])
     ops.getxattr  = cfs_getxattr;
     ops.listxattr = cfs_listxattr;
 
-    return fuse_main(static_cast<int>(fuse_argv.size()), fuse_argv.data(),
-                     &ops, nullptr);
+    return fuse_main(static_cast<int>(fuse_argv.size()), fuse_argv.data(), &ops, nullptr);
 }

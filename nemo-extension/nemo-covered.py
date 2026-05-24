@@ -32,6 +32,7 @@ import gi
 gi.require_version('Gtk', '3.0')
 
 from gi.repository import GObject, GLib, Gio, Gtk, Nemo
+import subprocess
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -106,6 +107,7 @@ class CoveredExtension(
     GObject.GObject,
     Nemo.InfoProvider,
     Nemo.ColumnProvider,
+    Nemo.MenuProvider,
     Nemo.NameAndDescProvider,
 ):
     """
@@ -221,6 +223,42 @@ class CoveredExtension(
                 file.add_string_attribute("covered_at", covered_at.decode("utf-8"))
 
         return Nemo.OperationResult.COMPLETE
+
+    # ── Nemo.MenuProvider ───────────────────────────────────────────────────
+
+    def get_file_items(self, window, files):
+        """Add 'Open containing backup folder' context menu item for covered files."""
+        if len(files) != 1:
+            return
+        f = files[0]
+        if f.get_uri_scheme() != "file" or f.is_directory():
+            return
+
+        path = urllib.parse.unquote(f.get_uri()[7:])
+        val = _get_covered_xattr(path)
+        if val != b"covered":
+            return
+
+        covered_at = _get_xattr(path, XATTR_COVERED_AT)
+        if not covered_at:
+            return
+
+        backup_file_path = covered_at.decode("utf-8")
+
+        item = Nemo.MenuItem(
+            name="NemoCovered::open_backup_folder",
+            label="Open containing backup folder",
+            tip="Open the backup folder containing this file and select it",
+        )
+        item.connect("activate", self._open_backup_folder, backup_file_path)
+        return [item]
+
+    def _open_backup_folder(self, menu_item, backup_file_path):
+        """Open Nemo showing the backup folder with the file selected."""
+        subprocess.Popen(
+            ["nemo", "--no-desktop", backup_file_path],
+            start_new_session=True,
+        )
 
     def get_name_and_desc(self):
         return ["nemo-covered:::Color files/folders by backup coverage (user.covered xattr)"]

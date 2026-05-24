@@ -302,7 +302,7 @@ Indexes: `idx_files_inode(inode)`, `idx_files_size(size)`
 | Column | Type | Description |
 |---|---|---|
 | `id` | INTEGER PRIMARY KEY AUTOINCREMENT | Unique identifier for each backup source |
-| `path` | TEXT NOT NULL UNIQUE | Absolute path of the backup root |
+| `path` | TEXT NOT NULL UNIQUE | Absolute path of the backup DB |
 
 This table tracks which backups have been matched against this source.
 Rows are inserted automatically by `covered_match`; matching the same backup
@@ -316,6 +316,6 @@ file points to the first backup that contained a matching copy.
 |---|---|---|
 | `inode` | INTEGER PRIMARY KEY | File inode |
 | `head_hash` | BLOB | blake3 hash of the first 2048 bytes (`NULL` until computed) |
-| `full_hash` | BLOB | blake3 hash of the entire file (`NULL` until computed) |
+| `full_hash` | BLOB | blake3 hash of the entire file (`NULL` until computed) - **Indexed** |
 
 Both hash columns are populated lazily during the match phase and cached for reuse.
