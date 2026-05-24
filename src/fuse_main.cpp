@@ -44,11 +44,107 @@ struct FsNode {
 // Global filesystem state
 // ------------------------------------------------------------------
 
-struct CoverFs {
+class CoverFs {
+public:
     std::string root_path;
     std::string src_db_folder; // path to the source DB folder (for hash.db)
     std::unordered_map<int, std::string> backup_paths; // backup_id -> absolute backup root path
     std::unordered_map<std::string, FsNode> nodes; // vpath -> FsNode
+
+    CoverFs(covered::Database& db, std::string src_db)
+        : src_db_folder(std::move(src_db))
+    {
+        root_path = db.get_root_path().value_or("/");
+
+        // Ensure dirs have covered column and error columns
+        db.migrate_dirs_covered_column();
+        db.migrate_error_columns();
+
+        auto dirs = db.get_all_dirs();
+        if (dirs.empty()) return;
+
+        // Compute dir covered states
+        auto dir_covered = db.compute_dir_covered();
+
+        // Map inode -> dir entry for path building
+        std::unordered_map<uint64_t, const covered::DirEntry*> by_inode;
+        for (const auto& d : dirs) by_inode[d.inode] = &d;
+
+        // Build path for each dir inode
+        std::unordered_map<uint64_t, std::string> dir_paths;
+        std::function<std::string(uint64_t)> get_dir_path = [&](uint64_t inode) -> std::string {
+            auto it = dir_paths.find(inode);
+            if (it != dir_paths.end()) return it->second;
+            auto dit = by_inode.find(inode);
+            if (dit == by_inode.end()) return "";
+            const auto* d = dit->second;
+            std::string path;
+            if (d->parent_inode == 0) {
+                path = "/"; // root
+            } else {
+                std::string parent = get_dir_path(d->parent_inode);
+                path = (parent == "/" ? "" : parent) + "/" + d->name;
+            }
+            dir_paths[inode] = path;
+            return path;
+        };
+        for (const auto& d : dirs) get_dir_path(d.inode);
+
+        // Insert directory nodes
+        for (const auto& d : dirs) {
+            std::string vpath = dir_paths[d.inode];
+            auto cit = dir_covered.find(d.inode);
+            int cov_state = cit != dir_covered.end() ? cit->second : 0;
+
+            FsNode node;
+            node.kind      = NodeKind::Dir;
+            node.covered   = cov_state;
+            node.error     = d.error;
+            node.size      = 0;
+            node.mtime     = 0;
+            node.inode     = 0;
+            node.backup_id = 0;
+            nodes[vpath] = node;
+        }
+
+        // Insert file nodes and register as children of their dir
+        auto all_files = db.get_all_files();
+        for (const auto& f : all_files) {
+            auto pit = dir_paths.find(f.dir_inode);
+            if (pit == dir_paths.end()) continue;
+            const std::string& dir_vpath = pit->second;
+            std::string vpath = (dir_vpath == "/" ? "" : dir_vpath) + "/" + f.name;
+
+            FsNode node;
+            node.kind      = NodeKind::File;
+            node.covered   = f.covered ? static_cast<int>(covered::CoveredState::Covered)
+                                       : (f.error ? static_cast<int>(covered::CoveredState::Error)
+                                                  : static_cast<int>(covered::CoveredState::Uncovered));
+            node.error     = f.error;
+            node.size      = f.size;
+            node.mtime     = f.mtime;
+            node.inode     = f.inode;
+            node.backup_id = f.backup_id;
+            // Reconstruct real path from root_path
+            node.real_path = root_path + vpath;
+            nodes[vpath] = node;
+
+            // Register as child of parent dir
+            auto& dir_node = nodes[dir_vpath];
+            dir_node.children.push_back(f.name);
+        }
+
+        for (const auto& d : dirs) {
+            if (d.parent_inode == 0) continue;
+            std::string parent_vpath = dir_paths[d.parent_inode];
+            auto pit = nodes.find(parent_vpath);
+            if (pit != nodes.end()) {
+                pit->second.children.push_back(d.name);
+            }
+        }
+    }
+
+    bool empty() const { return nodes.empty(); }
 };
 
 // ------------------------------------------------------------------
@@ -73,103 +169,6 @@ static const char* state_str(int state)
     case static_cast<int>(covered::CoveredState::Error):     return "error";
     default:                                                  return "uncovered";
     }
-}
-
-// ------------------------------------------------------------------
-// Build in-memory filesystem from DB
-// ------------------------------------------------------------------
-
-static bool build_fs(covered::Database& db, CoverFs& fs)
-{
-    fs.root_path = db.get_root_path().value_or("/");
-
-    // Ensure dirs have covered column and error columns
-    db.migrate_dirs_covered_column();
-    db.migrate_error_columns();
-
-    auto dirs = db.get_all_dirs();
-    if (dirs.empty()) return false;
-
-    // Compute dir covered states
-    auto dir_covered = db.compute_dir_covered();
-
-    // Map inode -> dir entry for path building
-    std::unordered_map<uint64_t, const covered::DirEntry*> by_inode;
-    for (const auto& d : dirs) by_inode[d.inode] = &d;
-
-    // Build path for each dir inode
-    std::unordered_map<uint64_t, std::string> dir_paths;
-    std::function<std::string(uint64_t)> get_dir_path = [&](uint64_t inode) -> std::string {
-        auto it = dir_paths.find(inode);
-        if (it != dir_paths.end()) return it->second;
-        auto dit = by_inode.find(inode);
-        if (dit == by_inode.end()) return "";
-        const auto* d = dit->second;
-        std::string path;
-        if (d->parent_inode == 0) {
-            path = "/"; // root
-        } else {
-            std::string parent = get_dir_path(d->parent_inode);
-            path = (parent == "/" ? "" : parent) + "/" + d->name;
-        }
-        dir_paths[inode] = path;
-        return path;
-    };
-    for (const auto& d : dirs) get_dir_path(d.inode);
-
-    // Insert directory nodes
-    for (const auto& d : dirs) {
-        std::string vpath = dir_paths[d.inode];
-        auto cit = dir_covered.find(d.inode);
-        int cov_state = cit != dir_covered.end() ? cit->second : 0;
-
-        FsNode node;
-        node.kind      = NodeKind::Dir;
-        node.covered   = cov_state;
-        node.error     = d.error;
-        node.size      = 0;
-        node.mtime     = 0;
-        node.inode     = 0;
-        node.backup_id = 0;
-        fs.nodes[vpath] = node;
-    }
-
-    // Insert file nodes and register as children of their dir
-    auto all_files = db.get_all_files();
-    for (const auto& f : all_files) {
-        auto pit = dir_paths.find(f.dir_inode);
-        if (pit == dir_paths.end()) continue;
-        const std::string& dir_vpath = pit->second;
-        std::string vpath = (dir_vpath == "/" ? "" : dir_vpath) + "/" + f.name;
-
-        FsNode node;
-        node.kind      = NodeKind::File;
-        node.covered   = f.covered ? static_cast<int>(covered::CoveredState::Covered)
-                                   : (f.error ? static_cast<int>(covered::CoveredState::Error)
-                                              : static_cast<int>(covered::CoveredState::Uncovered));
-        node.error     = f.error;
-        node.size      = f.size;
-        node.mtime     = f.mtime;
-        node.inode     = f.inode;
-        node.backup_id = f.backup_id;
-        // Reconstruct real path from root_path
-        node.real_path = fs.root_path + vpath;
-        fs.nodes[vpath] = node;
-
-        // Register as child of parent dir
-        auto& dir_node = fs.nodes[dir_vpath];
-        dir_node.children.push_back(f.name);
-    }
-
-    for (const auto& d : dirs) {
-        if (d.parent_inode == 0) continue;
-        std::string parent_vpath = dir_paths[d.parent_inode];
-        auto pit = fs.nodes.find(parent_vpath);
-        if (pit != fs.nodes.end()) {
-            pit->second.children.push_back(d.name);
-        }
-    }
-    return true;
 }
 
 // ------------------------------------------------------------------
@@ -572,9 +571,8 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    CoverFs fs;
-    fs.src_db_folder = std::filesystem::absolute(src_folder).string();
-    if (!build_fs(db, fs)) {
+    CoverFs fs(db, std::filesystem::absolute(src_folder).string());
+    if (fs.empty()) {
         std::cerr << "Error: failed to build filesystem from database.\n";
         return 1;
     }
