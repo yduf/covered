@@ -50,21 +50,35 @@ public:
     std::string src_db_folder; // path to the source DB folder (for hash.db)
     std::unordered_map<int, std::string> backup_paths; // backup_id -> absolute backup root path
     std::unordered_map<std::string, FsNode> nodes; // vpath -> FsNode
+    covered::Database src_db; // the source filesize.db
 
-    CoverFs(covered::Database& db, std::string src_db)
-        : src_db_folder(std::move(src_db))
+    CoverFs(const std::string& src_folder)
+        : src_db_folder(std::filesystem::absolute(src_folder).string())
+        , src_db(src_folder + "/filesize.db")
     {
-        root_path = db.get_root_path().value_or("/");
+        std::string db_path = src_folder + "/filesize.db";
+        if (!std::filesystem::exists(db_path)) {
+            error_ = true;
+            error_msg_ = "database not found: " + db_path;
+            return;
+        }
+        if (src_db.has_error()) {
+            error_ = true;
+            error_msg_ = src_db.error_msg();
+            return;
+        }
+
+        root_path = src_db.get_root_path().value_or("/");
 
         // Ensure dirs have covered column and error columns
-        db.migrate_dirs_covered_column();
-        db.migrate_error_columns();
+        src_db.migrate_dirs_covered_column();
+        src_db.migrate_error_columns();
 
-        auto dirs = db.get_all_dirs();
+        auto dirs = src_db.get_all_dirs();
         if (dirs.empty()) return;
 
         // Compute dir covered states
-        auto dir_covered = db.compute_dir_covered();
+        auto dir_covered = src_db.compute_dir_covered();
 
         // Map inode -> dir entry for path building
         std::unordered_map<uint64_t, const covered::DirEntry*> by_inode;
@@ -108,7 +122,7 @@ public:
         }
 
         // Insert file nodes and register as children of their dir
-        auto all_files = db.get_all_files();
+        auto all_files = src_db.get_all_files();
         for (const auto& f : all_files) {
             auto pit = dir_paths.find(f.dir_inode);
             if (pit == dir_paths.end()) continue;
@@ -142,9 +156,31 @@ public:
                 pit->second.children.push_back(d.name);
             }
         }
+        load_backup_paths();
     }
 
     bool empty() const { return nodes.empty(); }
+    bool has_error() const { return error_; }
+    const std::string& error_msg() const { return error_msg_; }
+
+private:
+    void load_backup_paths()
+    {
+        sqlite3* raw = src_db.raw_db();
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "SELECT id, path FROM backup_db";
+        if (sqlite3_prepare_v2(raw, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                int id = sqlite3_column_int(stmt, 0);
+                const char* p = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                if (p) backup_paths[id] = p;
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+
+    bool error_ = false;
+    std::string error_msg_;
 };
 
 // ------------------------------------------------------------------
@@ -559,37 +595,14 @@ int main(int argc, char* argv[])
     std::string src_folder  = argv[1];
     std::string mount_point = argv[2];
 
-    std::string db_path = src_folder + "/filesize.db";
-    if (!std::filesystem::exists(db_path)) {
-        std::cerr << "Error: database not found: " << db_path << "\n";
+    CoverFs fs(src_folder);
+    if (fs.has_error()) {
+        std::cerr << "Error opening database: " << fs.error_msg() << "\n";
         return 1;
     }
-
-    covered::Database db(db_path);
-    if (db.has_error()) {
-        std::cerr << "Error opening database: " << db.error_msg() << "\n";
-        return 1;
-    }
-
-    CoverFs fs(db, std::filesystem::absolute(src_folder).string());
     if (fs.empty()) {
         std::cerr << "Error: failed to build filesystem from database.\n";
         return 1;
-    }
-
-    // Load backup paths from backup_db table
-    {
-        sqlite3* raw = db.raw_db();
-        sqlite3_stmt* stmt = nullptr;
-        const char* sql = "SELECT id, path FROM backup_db";
-        if (sqlite3_prepare_v2(raw, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-            while (sqlite3_step(stmt) == SQLITE_ROW) {
-                int id = sqlite3_column_int(stmt, 0);
-                const char* p = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-                if (p) fs.backup_paths[id] = p;
-            }
-            sqlite3_finalize(stmt);
-        }
     }
 
     std::cerr << "Mounted " << fs.nodes.size() << " entries from " << src_folder
