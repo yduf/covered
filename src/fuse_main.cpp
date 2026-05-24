@@ -51,7 +51,14 @@ struct CoverFs {
     std::unordered_map<std::string, FsNode> nodes; // vpath -> FsNode
 };
 
-static CoverFs* g_fs = nullptr;
+// ------------------------------------------------------------------
+// FUSE context helper
+// ------------------------------------------------------------------
+
+static CoverFs* get_fs()
+{
+    return static_cast<CoverFs*>(fuse_get_context()->private_data);
+}
 
 // ------------------------------------------------------------------
 // Covered state → string for xattr
@@ -279,10 +286,10 @@ static std::string derive_backup_db_folder(const std::string& bkp_root_path, con
 // Helper: find backup file path from source inode using hash lookup
 // ------------------------------------------------------------------
 
-static std::string resolve_covered_at(uint64_t src_inode, int backup_id)
+static std::string resolve_covered_at(CoverFs* fs, uint64_t src_inode, int backup_id)
 {
     // 1. Get source file's full_hash from source hash.db
-    std::string src_hash_path = g_fs->src_db_folder + "/hash.db";
+    std::string src_hash_path = fs->src_db_folder + "/hash.db";
     std::optional<std::vector<uint8_t>> src_full_hash;
 
     {
@@ -314,13 +321,13 @@ static std::string resolve_covered_at(uint64_t src_inode, int backup_id)
     }
 
     // 2. Get backup db_folder path derived on-the-fly
-    auto it_path = g_fs->backup_paths.find(backup_id);
-    if (it_path == g_fs->backup_paths.end()) {
+    auto it_path = fs->backup_paths.find(backup_id);
+    if (it_path == fs->backup_paths.end()) {
         fprintf(stderr, "resolve_covered_at: backup_paths not found for id=%d\n", backup_id);
         return "";
     }
     std::string bkp_root = it_path->second;
-    std::string bkp_db_folder = derive_backup_db_folder(bkp_root, g_fs->src_db_folder);
+    std::string bkp_db_folder = derive_backup_db_folder(bkp_root, fs->src_db_folder);
     fprintf(stderr, "resolve_covered_at: bkp_root='%s' bkp_db_folder='%s'\n", bkp_root.c_str(), bkp_db_folder.c_str());
 
     // 3. Find matching inode in backup hash.db via indexed full_hash
@@ -370,8 +377,9 @@ static std::string resolve_covered_at(uint64_t src_inode, int backup_id)
 static int cfs_getattr(const char* path, struct stat* st, struct fuse_file_info* /*fi*/)
 {
     memset(st, 0, sizeof(*st));
-    auto it = g_fs->nodes.find(path);
-    if (it == g_fs->nodes.end()) return -ENOENT;
+    CoverFs* fs = get_fs();
+    auto it = fs->nodes.find(path);
+    if (it == fs->nodes.end()) return -ENOENT;
     const FsNode& node = it->second;
     if (node.kind == NodeKind::Dir) {
         st->st_mode  = S_IFDIR | 0755;
@@ -390,8 +398,9 @@ static int cfs_readdir(const char* path, void* buf, fuse_fill_dir_t filler,
                        off_t /*offset*/, struct fuse_file_info* /*fi*/,
                        enum fuse_readdir_flags /*flags*/)
 {
-    auto it = g_fs->nodes.find(path);
-    if (it == g_fs->nodes.end()) return -ENOENT;
+    CoverFs* fs = get_fs();
+    auto it = fs->nodes.find(path);
+    if (it == fs->nodes.end()) return -ENOENT;
     if (it->second.kind != NodeKind::Dir) return -ENOTDIR;
     filler(buf, ".",  nullptr, 0, FUSE_FILL_DIR_PLUS);
     filler(buf, "..", nullptr, 0, FUSE_FILL_DIR_PLUS);
@@ -403,8 +412,9 @@ static int cfs_readdir(const char* path, void* buf, fuse_fill_dir_t filler,
 
 static int cfs_open(const char* path, struct fuse_file_info* fi)
 {
-    auto it = g_fs->nodes.find(path);
-    if (it == g_fs->nodes.end()) return -ENOENT;
+    CoverFs* fs = get_fs();
+    auto it = fs->nodes.find(path);
+    if (it == fs->nodes.end()) return -ENOENT;
     if (it->second.kind != NodeKind::File) return -EISDIR;
     if ((fi->flags & O_ACCMODE) != O_RDONLY) return -EACCES;
     if (it->second.error) return -EACCES;
@@ -414,8 +424,9 @@ static int cfs_open(const char* path, struct fuse_file_info* fi)
 static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
                     struct fuse_file_info* /*fi*/)
 {
-    auto it = g_fs->nodes.find(path);
-    if (it == g_fs->nodes.end()) return -ENOENT;
+    CoverFs* fs = get_fs();
+    auto it = fs->nodes.find(path);
+    if (it == fs->nodes.end()) return -ENOENT;
     if (it->second.kind != NodeKind::File) return -EISDIR;
     const FsNode& node = it->second;
     if (node.error || node.real_path.empty()) return -EACCES;
@@ -457,8 +468,9 @@ static std::string compact_path(const std::string& path)
 
 static int cfs_listxattr(const char* path, char* buf, size_t size)
 {
-    auto it = g_fs->nodes.find(path);
-    if (it == g_fs->nodes.end()) return -ENOENT;
+    CoverFs* fs = get_fs();
+    auto it = fs->nodes.find(path);
+    if (it == fs->nodes.end()) return -ENOENT;
 
     const FsNode& node = it->second;
     size_t needed = sizeof("user.covered");
@@ -486,8 +498,9 @@ static int cfs_listxattr(const char* path, char* buf, size_t size)
 
 static int cfs_getxattr(const char* path, const char* name, char* buf, size_t size)
 {
-    auto it = g_fs->nodes.find(path);
-    if (it == g_fs->nodes.end()) return -ENOENT;
+    CoverFs* fs = get_fs();
+    auto it = fs->nodes.find(path);
+    if (it == fs->nodes.end()) return -ENOENT;
 
     const FsNode& node = it->second;
 
@@ -504,8 +517,8 @@ static int cfs_getxattr(const char* path, const char* name, char* buf, size_t si
     // user.covered_backup — compact form of the backup DB root path
     if (strcmp(name, "user.covered_backup") == 0) {
         if (node.backup_id <= 0) return -ENODATA;
-        auto bit = g_fs->backup_paths.find(node.backup_id);
-        if (bit == g_fs->backup_paths.end()) return -ENODATA;
+        auto bit = fs->backup_paths.find(node.backup_id);
+        if (bit == fs->backup_paths.end()) return -ENODATA;
         std::string compact = compact_path(bit->second);
         size_t vlen = compact.size();
         if (size == 0) return static_cast<int>(vlen);
@@ -519,7 +532,7 @@ static int cfs_getxattr(const char* path, const char* name, char* buf, size_t si
     // The relative path is the same as in the source filesystem (same tree structure)
     if (strcmp(name, "user.covered_at") == 0) {
         if (node.backup_id <= 0 || node.inode == 0) return -ENODATA;
-        std::string full = resolve_covered_at(node.inode, node.backup_id);
+        std::string full = resolve_covered_at(fs, node.inode, node.backup_id);
         if (full.empty()) return -ENODATA;
         size_t vlen = full.size();
         if (size == 0) return static_cast<int>(vlen);
@@ -581,8 +594,6 @@ int main(int argc, char* argv[])
         }
     }
 
-    g_fs = &fs;
-
     std::cerr << "Mounted " << fs.nodes.size() << " entries from " << src_folder
               << " at " << mount_point << "\n";
 
@@ -607,5 +618,5 @@ int main(int argc, char* argv[])
     ops.getxattr  = cfs_getxattr;
     ops.listxattr = cfs_listxattr;
 
-    return fuse_main(static_cast<int>(fuse_argv.size()), fuse_argv.data(), &ops, nullptr);
+    return fuse_main(static_cast<int>(fuse_argv.size()), fuse_argv.data(), &ops, &fs);
 }
