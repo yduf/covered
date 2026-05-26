@@ -60,8 +60,7 @@ public:
         src_db.migrate_error_columns();
 
         {
-            auto backup_paths = load_backup_paths();
-            for (const auto& [id, path] : backup_paths) {
+            for (const auto& [id, path] : src_db.get_backup_paths()) {
                 std::string bkp_db_folder = derive_backup_db_folder(path, src_folder_);
                 std::string hash_path = bkp_db_folder + "/hash.db";
                 bck_db.emplace(id, hash_path);
@@ -216,25 +215,6 @@ private:
             if (it + 1 != parts.rend()) result += "/";
         }
         return result;
-    }
-
-    std::unordered_map<int, std::string> load_backup_paths()
-    {
-        std::unordered_map<int, std::string> backup_paths;
-
-        sqlite3* raw = src_db.raw_db();
-        sqlite3_stmt* stmt = nullptr;
-        const char* sql = "SELECT id, path FROM backup_db";
-        if (sqlite3_prepare_v2(raw, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-            while (sqlite3_step(stmt) == SQLITE_ROW) {
-                int id = sqlite3_column_int(stmt, 0);
-                const char* p = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-                if (p) backup_paths[id] = p;
-            }
-            sqlite3_finalize(stmt);
-        }
-
-        return backup_paths;
     }
 
     std::unordered_map<fuse_ino_t, FsNode>                     inodes_;
@@ -750,6 +730,32 @@ static void fs_getxattr(fuse_req_t req, fuse_ino_t ino, const char* name, size_t
             return;
         }
         fuse_reply_buf(req, val, vlen);
+        return;
+    }
+
+    // user.covered_backup
+    if (strcmp(name, "user.covered_backup") == 0) {
+        if (node->backup_id <= 0) {
+            fuse_reply_err(req, ENODATA);
+            return;
+        }
+        const auto& paths = fs->src_db.get_backup_paths();
+        auto it = paths.find(node->backup_id);
+        if (it == paths.end()) {
+            fuse_reply_err(req, ENODATA);
+            return;
+        }
+        const std::string& val = it->second;
+        size_t vlen = val.size();
+        if (size == 0) {
+            fuse_reply_xattr(req, vlen);
+            return;
+        }
+        if (size < vlen) {
+            fuse_reply_err(req, ERANGE);
+            return;
+        }
+        fuse_reply_buf(req, val.c_str(), vlen);
         return;
     }
 

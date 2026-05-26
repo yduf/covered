@@ -65,6 +65,9 @@ public:
     void set_file_backup_id(uint64_t inode, int backup_id);
     void set_file_error(uint64_t inode);
 
+    // Backup path lookup
+    const std::unordered_map<int, std::string>& get_backup_paths() const { return backup_paths_; }
+
     // Report-phase helpers
     void migrate_dirs_covered_column();
     void migrate_error_columns();
@@ -86,13 +89,15 @@ public:
     // Build a map inode -> full path from the dirs table
     std::unordered_map<uint64_t, std::string> build_dir_paths(const std::string& root_path);
 
+    // Backing field for get_backup_paths()
+    std::unordered_map<int, std::string> backup_paths_;
 
     bool has_error() const { return error_; }
     const std::string& error_msg() const { return error_msg_; }
 
     sqlite3* raw_db() const { return db_; }
 
-private:
+public:
     void flush_dirs();
     void flush_files();
 

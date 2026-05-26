@@ -88,6 +88,20 @@ Database::Database(const std::string& path) {
     migrate_backup_db_table();
     migrate_drop_meta_table();
 
+    // Load backup paths into cache
+    {
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "SELECT id, path FROM backup_db";
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                int id = sqlite3_column_int(stmt, 0);
+                const char* p = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                if (p) backup_paths_[id] = p;
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+
     // Prepared statements for bulk insert
     const char* sql_dir = "INSERT INTO dirs (inode, parent_inode, name, error) VALUES (?, ?, ?, ?)";
     rc = sqlite3_prepare_v2(db_, sql_dir, -1, &stmt_dir_, nullptr);
