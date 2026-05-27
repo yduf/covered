@@ -74,22 +74,6 @@ check_noattr() {
     fi
 }
 
-check_covered_at() {
-    local filepath="$1"
-    local desc="$2"
-    local full="$MNT/$filepath"
-
-    local val
-    val=$(getfattr --only-values -n user.covered_at "$full" 2>/dev/null || echo "ERROR")
-    if [ "$val" = "ERROR" ] || [ -z "$val" ]; then
-        echo "  SKIP: $desc (user.covered_at not yet implemented)"
-    elif [ "$val" = "/tmp/covered_fuse_test_bkp/${filepath}" ]; then
-        echo "  OK: $desc (user.covered_at=$val)"
-        PASS=$((PASS + 1))
-    else
-        echo "  SKIP: $desc (user.covered_at unexpected: '$val')"
-    fi
-}
 
 echo ""
 echo "--- Testing FUSE xattrs ---"
@@ -99,14 +83,14 @@ check_xattr "" "user.covered"      "partial"      "root dir coverage"
 check_noattr "" "user.covered_backup"              "root dir has no backup"
 
 # Covered file: same.txt
-check_xattr "same.txt" "user.covered"       "covered"                   "covered file coverage"
-check_xattr "same.txt" "user.covered_backup" "/t/covered_fuse_test_bkp" "covered file backup compact"
-check_covered_at "same.txt" "covered file covered_at"
+check_xattr "same.txt" "user.covered"       "covered"                       "covered file coverage"
+check_xattr "same.txt" "user.covered_backup" "/tmp/covered_fuse_test_bkp"    "covered file backup path"
+check_xattr "same.txt" "user.covered_at"    "/tmp/covered_fuse_test_bkp/same.txt" "covered file covered_at"
 
 # Covered nested file
-check_xattr "sub/nested.txt" "user.covered"       "covered"                   "nested covered file coverage"
-check_xattr "sub/nested.txt" "user.covered_backup" "/t/covered_fuse_test_bkp" "nested file backup compact"
-check_covered_at "sub/nested.txt" "nested covered file covered_at"
+check_xattr "sub/nested.txt" "user.covered"       "covered"                       "nested covered file coverage"
+check_xattr "sub/nested.txt" "user.covered_backup" "/tmp/covered_fuse_test_bkp"    "nested file backup path"
+check_xattr "sub/nested.txt" "user.covered_at"    "/tmp/covered_fuse_test_bkp/sub/nested.txt" "nested covered file covered_at"
 
 # Uncovered file
 check_xattr "unique.txt" "user.covered" "uncovered"           "uncovered file coverage"

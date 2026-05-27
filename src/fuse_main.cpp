@@ -277,10 +277,11 @@ static std::string build_backup_path(uint64_t backup_inode, const std::string& b
             sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(backup_inode));
             if (sqlite3_step(stmt) == SQLITE_ROW) {
                 const char* name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-                if (name) parts.push_back(name);
+                // Don't include the root directory name (already in root_path from config.json)
                 uint64_t parent = sqlite3_column_type(stmt, 0) == SQLITE_NULL
                                       ? 0
                                       : static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
+                if (parent != 0 && name) parts.push_back(name);
                 sqlite3_finalize(stmt);
                 stmt = nullptr;
 
@@ -289,10 +290,11 @@ static std::string build_backup_path(uint64_t backup_inode, const std::string& b
                         sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(parent));
                         if (sqlite3_step(stmt) == SQLITE_ROW) {
                             const char* n = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-                            if (n) parts.push_back(n);
                             parent = sqlite3_column_type(stmt, 0) == SQLITE_NULL
                                          ? 0
                                          : static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
+                            // Don't include the root directory name (already in root_path)
+                            if (parent != 0 && n) parts.push_back(n);
                         } else {
                             parent = 0;
                         }
@@ -325,7 +327,7 @@ static std::string build_backup_path(uint64_t backup_inode, const std::string& b
     }
     sqlite3_close(db);
 
-    if (parts.empty()) return "";
+    if (parts.empty()) return root_path;
 
     std::string result = root_path;
     if (!result.empty() && result.back() != '/') result += '/';
