@@ -50,12 +50,19 @@ static std::string derive_backup_db_folder(const std::string& bkp_root_path, con
 class CoverFs {
 public:
     covered::Database src_db; // the source filesize.db
+    covered::HashDatabase src_hash_; // source hash.db
     std::unordered_map<int, covered::HashDatabase> bck_db; // backup_id -> backup
 
     CoverFs(const std::string& src_folder) :
         src_db(std::filesystem::absolute(src_folder).string() + "/filesize.db"),
-        src_folder_(std::filesystem::absolute(src_folder).string())
+        src_hash_(std::filesystem::absolute(src_folder).string() + "/hash.db")
     {
+        src_folder_ = std::filesystem::absolute(src_folder).string();
+        // Strip trailing slash — parent_path() misbehaves on "/dir/"
+        while (!src_folder_.empty() && src_folder_.back() == '/') {
+            src_folder_.pop_back();
+        }
+
         src_db.migrate_dirs_covered_column();
         src_db.migrate_error_columns();
 
@@ -374,82 +381,60 @@ std::string CoverFs::resolve_covered_at(fuse_ino_t ino)
     if (node.kind != NodeKind::File || node.backup_id <= 0 || node.db_inode == 0)
         return "";
 
-    // 1. Get source file's full_hash from source hash.db
-    std::string src_hash_path = src_db.db_folder_ + "/hash.db";
-    std::optional<std::vector<uint8_t>> src_full_hash;
-
-    {
-        sqlite3* hdb = nullptr;
-        if (sqlite3_open(src_hash_path.c_str(), &hdb) != SQLITE_OK) return "";
-        sqlite3_exec(hdb, "PRAGMA journal_mode=WAL;", nullptr, nullptr, nullptr);
-
-        sqlite3_stmt* stmt = nullptr;
-        const char* sql = "SELECT full_hash FROM hashes WHERE inode = ?";
-        if (sqlite3_prepare_v2(hdb, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-            sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(node.db_inode));
-            if (sqlite3_step(stmt) == SQLITE_ROW) {
-                const void* blob = sqlite3_column_blob(stmt, 0);
-                int len = sqlite3_column_bytes(stmt, 0);
-                if (blob && len > 0) {
-                    src_full_hash = std::vector<uint8_t>(
-                        static_cast<const uint8_t*>(blob),
-                        static_cast<const uint8_t*>(blob) + len);
-                }
-            }
-            sqlite3_finalize(stmt);
-        }
-        sqlite3_close(hdb);
-    }
-
-    if (!src_full_hash.has_value() || src_full_hash->empty()) {
-        fprintf(stderr, "resolve_covered_at: no full_hash for src_db_inode=%lu\n",
-                (unsigned long)node.db_inode);
+    // 1. Get source file's full_hash from source hash.db via src_hash_
+    auto src_full_hash = src_hash_.get_full_hash(node.db_inode);
+    if (!src_full_hash.has_value() || src_full_hash->empty())
         return "";
-    }
 
-    std::string bkp_root = "";
-    std::string bkp_db_folder = derive_backup_db_folder(bkp_root, src_folder_);
-    fprintf(stderr, "resolve_covered_at: bkp_root='%s' bkp_db_folder='%s'\n",
-            bkp_root.c_str(), bkp_db_folder.c_str());
+    // 2. Find the backup hash.db for this file's backup_id
+    auto bkp_it = bck_db.find(node.backup_id);
+    if (bkp_it == bck_db.end() || bkp_it->second.has_error())
+        return "";
+    covered::HashDatabase& bkp_hash = bkp_it->second;
 
     // 3. Find matching inode in backup hash.db via indexed full_hash
-    std::string bkp_hash_path = bkp_db_folder + "/hash.db";
-    uint64_t bkp_inode = 0;
-    fprintf(stderr, "resolve_covered_at: opening bkp_hash_path='%s'\n", bkp_hash_path.c_str());
+    auto bkp_inode_opt = bkp_hash.find_inode_by_full_hash(*src_full_hash);
+    if (!bkp_inode_opt.has_value() || *bkp_inode_opt == 0)
+        return "";
+    uint64_t bkp_inode = *bkp_inode_opt;
 
+    // 4. Look up the backup file's dir_inode and name from backup filesize.db
+    std::string bkp_root = src_db.get_backup_path(node.backup_id);
+    std::string bkp_db_folder = derive_backup_db_folder(bkp_root, src_folder_);
+
+    std::string bkp_file_name;
+    uint64_t bkp_dir_inode = 0;
     {
-        sqlite3* bdb = nullptr;
-        if (sqlite3_open(bkp_hash_path.c_str(), &bdb) != SQLITE_OK) {
-            fprintf(stderr, "resolve_covered_at: failed to open bkp hash.db\n");
-            return "";
-        }
-        sqlite3_exec(bdb, "PRAGMA journal_mode=WAL;", nullptr, nullptr, nullptr);
+        std::string bkp_filesize_path = bkp_db_folder + "/filesize.db";
+        sqlite3* fdb = nullptr;
+        if (sqlite3_open(bkp_filesize_path.c_str(), &fdb) != SQLITE_OK) return "";
+        sqlite3_exec(fdb, "PRAGMA journal_mode=WAL;", nullptr, nullptr, nullptr);
 
         sqlite3_stmt* stmt = nullptr;
-        const char* sql = "SELECT inode FROM hashes WHERE full_hash = ? LIMIT 1";
-        if (sqlite3_prepare_v2(bdb, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-            sqlite3_bind_blob(stmt, 1, src_full_hash->data(),
-                              static_cast<int>(src_full_hash->size()), SQLITE_STATIC);
-            int rc = sqlite3_step(stmt);
-            fprintf(stderr, "resolve_covered_at: hash lookup rc=%d\n", rc);
-            if (rc == SQLITE_ROW) {
-                bkp_inode = static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
-                fprintf(stderr, "resolve_covered_at: found bkp_inode=%lu\n",
-                        (unsigned long)bkp_inode);
+        const char* sql = "SELECT dir_inode, name FROM files WHERE inode = ?";
+        if (sqlite3_prepare_v2(fdb, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(bkp_inode));
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                bkp_dir_inode = static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
+                const char* fname = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                if (fname) bkp_file_name = fname;
             }
             sqlite3_finalize(stmt);
         }
-        sqlite3_close(bdb);
+        sqlite3_close(fdb);
     }
 
-    if (bkp_inode == 0) {
-        fprintf(stderr, "resolve_covered_at: bkp_inode not found\n");
+    if (bkp_dir_inode == 0 || bkp_file_name.empty())
         return "";
-    }
 
-    // 4. Build full path from backup filesize.db
-     std::string result = build_backup_path(bkp_inode, bkp_db_folder);
-    fprintf(stderr, "resolve_covered_at: result='%s'\n", result.c_str());
+    // 5. Build full path from backup filesize.db using dir_inode
+    std::string dir_path = build_backup_path(bkp_dir_inode, bkp_db_folder);
+    if (dir_path.empty())
+        return "";
+
+    std::string result = dir_path;
+    if (!result.empty() && result.back() != '/') result += '/';
+    result += bkp_file_name;
     return result;
 }
 

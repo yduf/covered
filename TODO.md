@@ -2,12 +2,13 @@
 
 ## Refactor FUSE
 - [x] - [FUSE Filesystem Refactoring Tips](https://chatgpt.com/share/6a157d07-127c-83eb-94d7-876be5503adc)
-  - [ ] - backup DB column
-  - [ ] - covered at column
+  - [x] - backup DB column
+  - [x] - covered at column
 
 ## Nemo extension
 - [ ] - missing information
   - [ ] - covered column
+  - [ ] - shortened covered column
 
 
 ## Other

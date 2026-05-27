@@ -130,6 +130,9 @@ public:
     std::optional<std::vector<uint8_t>> get_head_hash(uint64_t inode);
     std::optional<std::vector<uint8_t>> get_full_hash(uint64_t inode);
 
+    // Reverse lookup: find inode by full_hash blob
+    std::optional<uint64_t> find_inode_by_full_hash(const std::vector<uint8_t>& full_hash);
+
     void set_head_hash(uint64_t inode, const uint8_t* hash, size_t len);
     void set_full_hash(uint64_t inode, const uint8_t* hash, size_t len);
 

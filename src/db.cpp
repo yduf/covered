@@ -793,6 +793,22 @@ void HashDatabase::log_cluster(int64_t size, uint64_t file_count, bool matched, 
     sqlite3_step(stmt_log_cluster_);
 }
 
+std::optional<uint64_t> HashDatabase::find_inode_by_full_hash(const std::vector<uint8_t>& full_hash) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT inode FROM hashes WHERE full_hash = ? LIMIT 1";
+    std::optional<uint64_t> result;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_blob(stmt, 1, full_hash.data(),
+                          static_cast<int>(full_hash.size()), SQLITE_STATIC);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            result = static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
+        }
+        sqlite3_finalize(stmt);
+    }
+    return result;
+}
+
 void HashDatabase::sync() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (db_) {
