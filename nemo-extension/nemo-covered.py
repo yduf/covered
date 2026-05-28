@@ -39,6 +39,7 @@ import subprocess
 XATTR_NAME         = b"user.covered"
 XATTR_BACKUP       = b"user.covered_backup"
 XATTR_COVERED_AT   = b"user.covered_at"
+XATTR_COVERED_SRC  = b"user.covered_source"
 COLORS_D_DIR       = "/usr/share/folder-color-switcher/colors.d"
 
 # Map xattr value → emblem icon name (None = no emblem)
@@ -170,6 +171,12 @@ class CoveredExtension(
     # ── Nemo.ColumnProvider ─────────────────────────────────────────────────
 
     def get_columns(self):
+        col_covered = Nemo.Column(
+            name="NemoCovered::covered_state",
+            attribute="covered_state",
+            label="Covered",
+            description="Backup coverage state (covered/uncovered/partial/empty/error)",
+        )
         col_backup = Nemo.Column(
             name="NemoCovered::backup",
             attribute="covered_backup",
@@ -182,7 +189,7 @@ class CoveredExtension(
             label="Covered at",
             description="Full path to the matched file in the backup",
         )
-        return [col_backup, col_covered_at]
+        return [col_covered, col_backup, col_covered_at]
 
     # ── Nemo.InfoProvider ───────────────────────────────────────────────────
 
@@ -212,7 +219,11 @@ class CoveredExtension(
                 _set_custom_icon(file.get_location(), icon_uri)
                 _icon_cache[uri] = icon_uri
 
-        # Custom columns: only for files (not directories) that are covered
+        # Custom columns: show covered state for all files and dirs
+        covered_label = val.decode("utf-8")
+        file.add_string_attribute("covered_state", covered_label)
+
+        # Backup columns: only for covered files (not dirs)
         if not file.is_directory() and val == b"covered":
             backup = _get_xattr(path, XATTR_BACKUP)
             if backup:
@@ -227,36 +238,57 @@ class CoveredExtension(
     # ── Nemo.MenuProvider ───────────────────────────────────────────────────
 
     def get_file_items(self, window, files):
-        """Add 'Open containing backup folder' context menu item for covered files."""
+        """Add context menu items for any item under the FUSE mount."""
         if len(files) != 1:
             return
         f = files[0]
-        if f.get_uri_scheme() != "file" or f.is_directory():
+        if f.get_uri_scheme() != "file":
             return
 
         path = urllib.parse.unquote(f.get_uri()[7:])
         val = _get_covered_xattr(path)
-        if val != b"covered":
+        if val is None:
             return
 
-        covered_at = _get_xattr(path, XATTR_COVERED_AT)
-        if not covered_at:
-            return
+        items = []
 
-        backup_file_path = covered_at.decode("utf-8")
+        # "Open original containing folder" — works for files and directories
+        source_path = _get_xattr(path, XATTR_COVERED_SRC)
+        if source_path:
+            src_path = source_path.decode("utf-8")
+            if f.is_directory():
+                # For a directory, open the directory itself
+                target = src_path
+            else:
+                # For a file, open its containing folder
+                target = os.path.dirname(src_path)
+            item_source = Nemo.MenuItem(
+                name="NemoCovered::open_source_folder",
+                label="Open original containing folder",
+                tip="Open the source folder holding this item on the original filesystem",
+            )
+            item_source.connect("activate", self._open_folder, target)
+            items.append(item_source)
 
-        item = Nemo.MenuItem(
-            name="NemoCovered::open_backup_folder",
-            label="Open containing backup folder",
-            tip="Open the backup folder containing this file and select it",
-        )
-        item.connect("activate", self._open_backup_folder, backup_file_path)
-        return [item]
+        # "Open containing backup folder" — only for covered files (not dirs)
+        if not f.is_directory() and val == b"covered":
+            covered_at = _get_xattr(path, XATTR_COVERED_AT)
+            if covered_at:
+                backup_file_path = covered_at.decode("utf-8")
+                item_backup = Nemo.MenuItem(
+                    name="NemoCovered::open_backup_folder",
+                    label="Open containing backup folder",
+                    tip="Open the backup folder containing this file and select it",
+                )
+                item_backup.connect("activate", self._open_folder, backup_file_path)
+                items.append(item_backup)
 
-    def _open_backup_folder(self, menu_item, backup_file_path):
-        """Open Nemo showing the backup folder with the file selected."""
+        return items if items else None
+
+    def _open_folder(self, menu_item, folder_path):
+        """Open Nemo showing the given folder."""
         subprocess.Popen(
-            ["nemo", "--no-desktop", backup_file_path],
+            ["nemo", "--no-desktop", folder_path],
             start_new_session=True,
         )
 

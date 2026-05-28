@@ -45,7 +45,7 @@ Mount the report with FUSE:
 And now in Nemo go to `/tmp/covered_mount`
 and you should see something like the screen shot above.
 
-You can also Check xattr user.coveredd from command line: 
+You can also Check xattr user.covered from command line: 
 `getfattr -n user.covered /tmp/covered_mount/some/file.txt`
 
 **Unmount**  

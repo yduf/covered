@@ -3,3 +3,4 @@
 !/subprojects/packagefiles/
 
 /covered_*
+/nemo-extension/__pycache__

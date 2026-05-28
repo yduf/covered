@@ -109,6 +109,14 @@ public:
             auto cit = dir_covered.find(d.inode);
             int cov_state = cit != dir_covered.end() ? cit->second : 0;
 
+            // Build real path for directories too (needed for user.covered_source xattr)
+            std::string dir_real_path;
+            if (parent_ino == 0) {
+                dir_real_path = root_path;
+            } else {
+                dir_real_path = root_path + build_relative_path(parent_ino, d.name);
+            }
+
             FsNode node;
             node.kind      = NodeKind::Dir;
             node.covered   = cov_state;
@@ -118,7 +126,7 @@ public:
             node.db_inode  = d.inode;
             node.parent_ino = parent_ino;
             node.backup_id = 0;
-            node.real_path = ""; // directories have no real path
+            node.real_path = dir_real_path;
             node.name      = d.name;
 
             inodes_[ino] = node;
@@ -802,6 +810,11 @@ static void fs_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
         needed += sizeof("user.covered_backup") + sizeof("user.covered_at");
         add_extra = true;
     }
+    bool add_source = false;
+    if (!node->real_path.empty()) {
+        needed += sizeof("user.covered_source");
+        add_source = true;
+    }
 
     if (size == 0) {
         fuse_reply_xattr(req, needed);
@@ -821,6 +834,10 @@ static void fs_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
         p += sizeof("user.covered_backup");
         memcpy(p, "user.covered_at", sizeof("user.covered_at"));
         p += sizeof("user.covered_at");
+    }
+    if (add_source) {
+        memcpy(p, "user.covered_source", sizeof("user.covered_source"));
+        p += sizeof("user.covered_source");
     }
 
     fuse_reply_buf(req, buf.data(), needed);
@@ -898,6 +915,25 @@ static void fs_getxattr(fuse_req_t req, fuse_ino_t ino, const char* name, size_t
             return;
         }
         fuse_reply_buf(req, full.c_str(), vlen);
+        return;
+    }
+
+    // user.covered_source — underlying source filesystem path
+    if (strcmp(name, "user.covered_source") == 0) {
+        if (node->real_path.empty()) {
+            fuse_reply_err(req, ENODATA);
+            return;
+        }
+        size_t vlen = node->real_path.size();
+        if (size == 0) {
+            fuse_reply_xattr(req, vlen);
+            return;
+        }
+        if (size < vlen) {
+            fuse_reply_err(req, ERANGE);
+            return;
+        }
+        fuse_reply_buf(req, node->real_path.c_str(), vlen);
         return;
     }
 
