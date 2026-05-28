@@ -13,6 +13,7 @@
 #include <cstring>
 #include <cerrno>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -444,19 +445,38 @@ std::string CoverFs::resolve_covered_at(fuse_ino_t ino)
 // Helper: fill struct stat from FsNode
 // ------------------------------------------------------------------
 
-static void fill_stat(const FsNode& node, struct stat& st)
+static void fill_stat(const FsNode& node, struct stat& st,
+                      const struct fuse_ctx* ctx = nullptr)
 {
     memset(&st, 0, sizeof(st));
     if (node.kind == NodeKind::Dir) {
         st.st_mode  = S_IFDIR | 0755;
         st.st_nlink = 2;
     } else {
-        st.st_mode  = S_IFREG | 0444;
+        st.st_mode  = S_IFREG | 0644;
         st.st_nlink = 1;
         st.st_size  = node.size;
         st.st_mtime = static_cast<time_t>(node.mtime);
+        st.st_blksize = 4096;
+        st.st_blocks  = (node.size + 511) / 512;
+    }
+
+    // Set ownership from caller context so files are not root-owned.
+    // ffprobe/FFmpeg rejects root-owned files with EACCES.
+    if (ctx != nullptr) {
+        st.st_uid = ctx->uid;
+        st.st_gid = ctx->gid;
     }
 }
+
+// ------------------------------------------------------------------
+// Per-open-file-handle state — tracks underlying fd + kernel position
+// ------------------------------------------------------------------
+
+struct FileHandle {
+    int fd = -1;
+    off_t pos = 0;   // kernel-visible file position (for SEEK_CUR / lseek offset 0)
+};
 
 // ==================================================================
 // Low-level FUSE callbacks
@@ -482,12 +502,23 @@ static void fs_lookup(fuse_req_t req, fuse_ino_t parent, const char* name)
 
     struct fuse_entry_param e = {};
     e.ino = child;
-    fill_stat(*node, e.attr);
+    fill_stat(*node, e.attr, fuse_req_ctx(req));
     // Use reasonable timeouts for a read-only filesystem
     e.attr_timeout = 3600.0;  // 1 hour
     e.entry_timeout = 3600.0; // 1 hour
 
     fuse_reply_entry(req, &e);
+}
+
+static void fs_access(fuse_req_t req, fuse_ino_t ino, int mask)
+{
+    // Always grant access. The underlying real file determines actual
+    // readability. Kernel-side permission checks on uid/gid/mode in
+    // the FUSE stat can reject files even when the daemon owns them —
+    // ffprobe/FFmpeg explicitly uses access() which hits this path.
+    (void)ino;
+    (void)mask;
+    fuse_reply_err(req, 0);
 }
 
 static void fs_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* /*fi*/)
@@ -500,7 +531,7 @@ static void fs_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* /*
     }
 
     struct stat st;
-    fill_stat(*node, st);
+    fill_stat(*node, st, fuse_req_ctx(req));
     fuse_reply_attr(req, &st, 3600.0);
 }
 
@@ -523,7 +554,7 @@ static void fs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 
     // "." entry at offset 0
     struct stat dot_st;
-    fill_stat(*dir_node, dot_st);
+    fill_stat(*dir_node, dot_st, fuse_req_ctx(req));
     if (offset <= idx) {
         size_t remaining = size - used;
         size_t entry_size = fuse_add_direntry(req, buf.data() + used, remaining,
@@ -542,7 +573,7 @@ static void fs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
         const FsNode* parent_node = fs->lookup_ino(dir_node->parent_ino);
         if (parent_node) {
             struct stat parent_st;
-            fill_stat(*parent_node, parent_st);
+            fill_stat(*parent_node, parent_st, fuse_req_ctx(req));
             if (offset <= idx) {
                 size_t remaining = size - used;
                 size_t entry_size = fuse_add_direntry(req, buf.data() + used, remaining,
@@ -559,6 +590,7 @@ static void fs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 
     // Children at offsets 2+
     if (children) {
+        const struct fuse_ctx* ctx = fuse_req_ctx(req);
         for (const auto& [child_name, child_ino] : *children) {
             if (offset > idx) {
                 ++idx;
@@ -568,10 +600,12 @@ static void fs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
             const FsNode* child_node = fs->lookup_ino(child_ino);
             struct stat child_st;
             if (child_node) {
-                fill_stat(*child_node, child_st);
+                fill_stat(*child_node, child_st, ctx);
             } else {
                 memset(&child_st, 0, sizeof(child_st));
-                child_st.st_mode = S_IFREG | 0444;
+                child_st.st_mode = S_IFREG | 0644;
+                child_st.st_uid = ctx->uid;
+                child_st.st_gid = ctx->gid;
             }
 
             size_t remaining = size - used;
@@ -590,6 +624,15 @@ static void fs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
     fuse_reply_buf(req, buf.data(), used);
 }
 
+static void fs_init(void* userdata, struct fuse_conn_info* conn)
+{
+    // Enable async reads for mmap page-fault handling.
+    // Enable splice_read for zero-copy data transfer from page cache —
+    // reduces latency for media probing (many small reads).
+    conn->want |= FUSE_CAP_ASYNC_READ | FUSE_CAP_SPLICE_READ;
+    (void)userdata;
+}
+
 static void fs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi)
 {
     CoverFs* fs = get_fs(req);
@@ -606,15 +649,25 @@ static void fs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi)
         fuse_reply_err(req, EACCES);
         return;
     }
-    if (node->error) {
-        fuse_reply_err(req, EACCES);
+    // Open the underlying file once and allocate a FileHandle.
+    // The FileHandle tracks the kernel-visible file position (for lseek).
+    // Stored in fi->fh, reused across reads, closed in fs_release.
+    int fd = ::open(node->real_path.c_str(), O_RDONLY);
+    if (fd < 0) {
+        fuse_reply_err(req, errno);
         return;
     }
+    auto* fh = new FileHandle;
+    fh->fd = fd;
+    fh->pos = 0;
+    fi->fh = reinterpret_cast<uint64_t>(fh);
+    fi->direct_io = 0;
+    fi->keep_cache = 1;     // retain kernel page cache across open/close cycles
     fuse_reply_open(req, fi);
 }
 
 static void fs_read(fuse_req_t req, fuse_ino_t ino, size_t size,
-                    off_t offset, struct fuse_file_info* /*fi*/)
+                    off_t offset, struct fuse_file_info* fi)
 {
     CoverFs* fs = get_fs(req);
     const FsNode* node = fs->lookup_ino(ino);
@@ -626,28 +679,106 @@ static void fs_read(fuse_req_t req, fuse_ino_t ino, size_t size,
         fuse_reply_err(req, EISDIR);
         return;
     }
-    if (node->error || node->real_path.empty()) {
+    if (node->real_path.empty()) {
         fuse_reply_err(req, EACCES);
         return;
     }
 
-    int fd = ::open(node->real_path.c_str(), O_RDONLY);
-    if (fd < 0) {
+    auto* fh = reinterpret_cast<FileHandle*>(fi->fh);
+    if (!fh || fh->fd < 0) {
+        fuse_reply_err(req, EBADF);
+        return;
+    }
+
+    // Use pread for atomic, stateless offset-based reads.
+    // pread does NOT modify the kernel file offset, so read requests
+    // from concurrent threads (common in media frameworks) cannot race.
+    std::vector<char> buf(size);
+    ssize_t res = ::pread(fh->fd, buf.data(), size, offset);
+    if (res < 0) {
         fuse_reply_err(req, errno);
         return;
     }
 
-    std::vector<char> buf(size);
-    ssize_t res = ::pread(fd, buf.data(), size, offset);
-    if (res < 0) {
-        int err = errno;
-        ::close(fd);
-        fuse_reply_err(req, err);
-        return;
-    }
-    ::close(fd);
+    // Track the logical position for lseek(SEEK_CUR) replies.
+    fh->pos = offset + static_cast<off_t>(res);
 
     fuse_reply_buf(req, buf.data(), static_cast<size_t>(res));
+}
+
+static void fs_release(fuse_req_t req, fuse_ino_t /*ino*/, struct fuse_file_info* fi)
+{
+    auto* fh = reinterpret_cast<FileHandle*>(fi->fh);
+    if (fh) {
+        if (fh->fd >= 0) {
+            ::close(fh->fd);
+        }
+        delete fh;
+    }
+    fi->fh = 0;
+    fuse_reply_err(req, 0);
+}
+
+static void fs_lseek(fuse_req_t req, fuse_ino_t ino, off_t offset, int whence,
+                     fuse_file_info* fi)
+{
+    CoverFs* fs = get_fs(req);
+    const FsNode* node = fs->lookup_ino(ino);
+    if (!node || node->kind != NodeKind::File) {
+        fuse_reply_err(req, EBADF);
+        return;
+    }
+
+    auto* fh = reinterpret_cast<FileHandle*>(fi->fh);
+    if (!fh || fh->fd < 0) {
+        fuse_reply_err(req, EBADF);
+        return;
+    }
+
+    off_t new_pos = 0;
+    switch (whence) {
+    case SEEK_SET:
+        new_pos = offset;
+        break;
+    case SEEK_CUR:
+        new_pos = fh->pos + offset;
+        break;
+    case SEEK_END:
+        new_pos = node->size + offset;
+        break;
+    default:
+        fuse_reply_err(req, EINVAL);
+        return;
+    }
+
+    if (new_pos < 0) {
+        fuse_reply_err(req, EINVAL);
+        return;
+    }
+
+    fh->pos = new_pos;
+    fuse_reply_lseek(req, new_pos);
+}
+
+static void fs_flush(fuse_req_t req, fuse_ino_t /*ino*/, struct fuse_file_info* /*fi*/)
+{
+    // Read-only filesystem — flush is a no-op.
+    // Must reply 0 so close() succeeds (some apps, including mpv/celluloid,
+    // treat a failing close as a fatal error even for read-only files).
+    fuse_reply_err(req, 0);
+}
+
+static void fs_statfs(fuse_req_t req, fuse_ino_t /*ino*/)
+{
+    // Provide minimal filesystem stats. Celluloid/mpv probes statfs and
+    // may refuse to open files if the call returns ENOSYS.
+    struct statvfs st = {};
+    st.f_bsize  = 4096;
+    st.f_frsize = 4096;
+    st.f_namemax = 255;
+    // f_blocks, f_bfree, f_bavail, f_files, f_ffree left at 0.
+    // "zero free blocks" is fine for a read-only, virtual fs.
+    fuse_reply_statfs(req, &st);
 }
 
 // ------------------------------------------------------------------
@@ -815,11 +946,17 @@ int main(int argc, char* argv[])
     }
 
     fuse_lowlevel_ops ops = {};
+    ops.init      = fs_init;
     ops.lookup    = fs_lookup;
     ops.getattr   = fs_getattr;
+    ops.access    = fs_access;
     ops.readdir   = fs_readdir;
     ops.open      = fs_open;
     ops.read      = fs_read;
+    ops.release   = fs_release;
+    ops.flush     = fs_flush;
+    ops.lseek     = fs_lseek;
+    ops.statfs    = fs_statfs;
     ops.getxattr  = fs_getxattr;
     ops.listxattr = fs_listxattr;
 

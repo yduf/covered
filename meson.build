@@ -68,6 +68,14 @@ if fuse3_dep.found()
         workdir : meson.current_source_dir(),
         timeout : 30
     )
+
+    # FUSE ffprobe compatibility test
+    test_fuse_ffprobe_script = find_program('tests/test_fuse_ffprobe.sh')
+    test('fuse_ffprobe', test_fuse_ffprobe_script,
+        depends : [covered_scan_size_exe, covered_match_exe, cover_report_exe, cover_fuse_exe],
+        workdir : meson.current_source_dir(),
+        timeout : 30
+    )
 else
     warning('libfuse3-dev not found – cover_fuse will not be built. Install with: sudo apt install libfuse3-dev')
 endif
