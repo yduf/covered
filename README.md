@@ -1,16 +1,17 @@
 # Covered ☂️
 
-A Tool to check if I have a backup of my file somewhere.
-
-Compare content of source & backup
-and list file in source that do not exist anywhere on backup.
-It should be reasonably fast for this purpose.
+A Tool to check if I have a backup of my files somewhere.
 
 Comes with an extension for [Nemo](https://github.com/linuxmint/nemo#nemo) (the linuxmint file-manager) so it's easy to have a visual cue of what is _covered_ or not, and it can be used to directly access (for copying) the missing parts.
 
 ![nemo](/doc/nemo-extension.png)
 
 ## Usage
+
+You may have a proper backup system in place (using Pika or Borg backup for eg), and you also may have
+video, photo and documents scattered accross various media, that you use as a backup (especially if you keep your
+old disk on a shelves).   
+This tools is here to help solve the second situation, where you want to know if a file you have on an (external) device, is present on one of you trusty backup or not and have that information before taking the decision to delete it to get some space.
 
 For source and backup, 
 these tools will build a database of existing files and compare them.
@@ -29,7 +30,7 @@ or list of uncovered files `./build/cover_report --report covered_media_yves_Big
 
 Easiest way is now to look at the result with Nemo. 
 
-Firt install the nemo extension (this only need to be done once)
+Firt install the nemo extension (this only need to be done once and `meson install` will take of it, see [Installation](#installation))
 
 ```sh
 sudo cp nemo-extension/nemo-covered.py /usr/share/nemo-python/extensions/
@@ -77,6 +78,20 @@ $ meson setup build
 $ cd build && meson compile
 $ sudo meson install
 ```
+
+# Alternatives
+
+- [Krokiet / Czkawka](https://github.com/qarmin/czkawka#features)
+- [rdfind](https://rdfind.pauldreik.se/) 
+- [fdupes](https://github.com/adrianlopezroche/fdupes)
+- [Duff](http://duff.dreda.org/)
+
+
+These are tools that are made to find and resolve duplicates,
+I didn't find them suitable for my particular use case.
+
+In general they use the same principle to do that resolution.
+
 
 # Principle
 
@@ -246,6 +261,14 @@ nemo -q && nemo
 Then navigate to the FUSE mount point in Nemo to see the color-coded emblems.
 
 # Details
+
+**Notes** This project was also an opportunity for me to test full code generation by LLM agent.
+
+Most (all?) the code in this repo was generated. I did some manual adjustement, but in general tried to have a mechanism (via skills, doc and README) to have good enough generation handling completly by the (different) agents.
+
+I tried different agents and technics to reduce the generation costs.
+
+The code should be good enougth to work, and algorithmicly sound enough to cover the desinged usage.
 
 ## DB
 
