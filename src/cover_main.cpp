@@ -19,6 +19,7 @@ static void print_usage(const char* prog) {
               << "  match   Match source against a backup\n"
               << "  report  Show coverage statistics\n"
               << "  fuse    Mount covered filesystem via FUSE\n"
+              << "  update  Incrementally update a coverdb from a sub-path\n"
               << "\n"
               << "Examples:\n"
               << "  " << prog << " scan /media/yves/Big\n"
@@ -27,6 +28,8 @@ static void print_usage(const char* prog) {
               << "  " << prog << " report coverdb/media_yves_Big/\n"
               << "  " << prog << " report -r coverdb/media_yves_Big/\n"
               << "  " << prog << " fuse coverdb/media_yves_Big/ /tmp/covered_mount\n"
+              << "  " << prog << " update coverdb/media_yves_Big/ /media/yves/Big/subfolder\n"
+              << "  " << prog << " update --compute-hash coverdb/media_yves_Big/ /media/yves/Big/subfolder\n"
               << "\n"
               << "Run '" << prog << " <subcommand> --help' for subcommand-specific options.\n";
 }
@@ -66,6 +69,8 @@ int main(int argc, char* argv[]) {
         ret = cmd_report(new_argc, new_argv);
     } else if (subcommand == "fuse") {
         ret = cmd_fuse(new_argc, new_argv);
+    } else if (subcommand == "update") {
+        ret = cmd_update(new_argc, new_argv);
     } else if (subcommand == "--help" || subcommand == "-h") {
         print_usage(argv[0]);
         ret = 0;

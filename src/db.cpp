@@ -4,6 +4,7 @@
 #include <cstring>
 #include <functional>
 #include <algorithm>
+#include <unordered_set>
 #include <fstream>
 #include <filesystem>
 
@@ -50,6 +51,7 @@ Database::Database(const std::string& path) {
             parent_inode INTEGER,
             name         TEXT    NOT NULL,
             error        INTEGER DEFAULT NULL,
+            delta        INTEGER DEFAULT NULL,
             PRIMARY KEY (inode)
         ) WITHOUT ROWID;
 
@@ -62,6 +64,7 @@ Database::Database(const std::string& path) {
             covered    INTEGER NOT NULL DEFAULT 0,
             error      INTEGER DEFAULT NULL,
             backup_id  INTEGER DEFAULT NULL,
+            delta      INTEGER DEFAULT NULL,
             PRIMARY KEY (dir_inode, name)
         ) WITHOUT ROWID;
 
@@ -87,6 +90,7 @@ Database::Database(const std::string& path) {
     migrate_backup_id_column();
     migrate_backup_db_table();
     migrate_drop_meta_table();
+    migrate_delta_columns();
 
     // Load backup paths into cache
     {
@@ -103,7 +107,7 @@ Database::Database(const std::string& path) {
     }
 
     // Prepared statements for bulk insert
-    const char* sql_dir = "INSERT INTO dirs (inode, parent_inode, name, error) VALUES (?, ?, ?, ?)";
+    const char* sql_dir = "INSERT INTO dirs (inode, parent_inode, name, error, delta) VALUES (?, ?, ?, ?, ?)";
     rc = sqlite3_prepare_v2(db_, sql_dir, -1, &stmt_dir_, nullptr);
     if (rc != SQLITE_OK) {
         error_ = true;
@@ -111,7 +115,7 @@ Database::Database(const std::string& path) {
         return;
     }
 
-    const char* sql_file = "INSERT INTO files (dir_inode, name, inode, size, mtime, covered, error, backup_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+    const char* sql_file = "INSERT INTO files (dir_inode, name, inode, size, mtime, covered, error, backup_id, delta) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
     rc = sqlite3_prepare_v2(db_, sql_file, -1, &stmt_file_, nullptr);
     if (rc != SQLITE_OK) {
         error_ = true;
@@ -251,6 +255,13 @@ void Database::migrate_backup_db_table() {
                    "  id   INTEGER PRIMARY KEY AUTOINCREMENT,"
                    "  path TEXT NOT NULL UNIQUE"
                    ");");
+}
+
+void Database::migrate_delta_columns() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Ignore error – columns may already exist
+    exec_sql(db_, "ALTER TABLE dirs ADD COLUMN delta INTEGER DEFAULT NULL;");
+    exec_sql(db_, "ALTER TABLE files ADD COLUMN delta INTEGER DEFAULT NULL;");
 }
 
 void Database::migrate_drop_meta_table() {
@@ -477,6 +488,10 @@ void Database::flush_dirs() {
             sqlite3_bind_int(stmt_dir_, 4, d.error);
         else
             sqlite3_bind_null(stmt_dir_, 4);
+        if (d.delta != 0)
+            sqlite3_bind_int(stmt_dir_, 5, d.delta);
+        else
+            sqlite3_bind_null(stmt_dir_, 5);
         int rc = sqlite3_step(stmt_dir_);
         if (rc != SQLITE_DONE) {
             error_ = true;
@@ -505,6 +520,10 @@ void Database::flush_files() {
             sqlite3_bind_int(stmt_file_, 8, f.backup_id);
         else
             sqlite3_bind_null(stmt_file_, 8);
+        if (f.delta != 0)
+            sqlite3_bind_int(stmt_file_, 9, f.delta);
+        else
+            sqlite3_bind_null(stmt_file_, 9);
         int rc = sqlite3_step(stmt_file_);
         if (rc != SQLITE_DONE) {
             error_ = true;
@@ -814,6 +833,292 @@ void HashDatabase::sync() {
     if (db_) {
         sqlite3_wal_checkpoint_v2(db_, nullptr, SQLITE_CHECKPOINT_PASSIVE, nullptr, nullptr);
     }
+}
+
+// ------------------------------------------------------------------
+// Update-phase helpers
+// ------------------------------------------------------------------
+
+std::vector<FileEntry> Database::get_files_in_subtree(uint64_t root_dir_inode) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<FileEntry> files;
+
+    // Collect all dir inodes under the subtree recursively
+    std::vector<uint64_t> dir_stack;
+    dir_stack.push_back(root_dir_inode);
+    std::unordered_set<uint64_t> visited;
+    std::vector<uint64_t> subtree_dirs;
+
+    while (!dir_stack.empty()) {
+        uint64_t cur = dir_stack.back();
+        dir_stack.pop_back();
+        if (visited.count(cur)) continue;
+        visited.insert(cur);
+        subtree_dirs.push_back(cur);
+
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "SELECT inode FROM dirs WHERE parent_inode = ?";
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(cur));
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                uint64_t child = static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
+                dir_stack.push_back(child);
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+
+    // Now get all files for all subtree dirs
+    for (uint64_t dir_inode : subtree_dirs) {
+        auto dir_files = get_files_by_dir(dir_inode);
+        files.insert(files.end(), dir_files.begin(), dir_files.end());
+    }
+    return files;
+}
+
+std::vector<DirEntry> Database::get_dirs_in_subtree(uint64_t root_dir_inode) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<DirEntry> dirs;
+
+    std::vector<uint64_t> dir_stack;
+    dir_stack.push_back(root_dir_inode);
+    std::unordered_set<uint64_t> visited;
+
+    while (!dir_stack.empty()) {
+        uint64_t cur = dir_stack.back();
+        dir_stack.pop_back();
+        if (visited.count(cur)) continue;
+        visited.insert(cur);
+
+        // Get this dir entry
+        auto d = get_dir(cur);
+        if (d.has_value()) {
+            dirs.push_back(*d);
+        }
+
+        // Find children
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "SELECT inode FROM dirs WHERE parent_inode = ?";
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(cur));
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                uint64_t child = static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
+                dir_stack.push_back(child);
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+    return dirs;
+}
+
+void Database::set_dir_delta(uint64_t inode, int delta) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "UPDATE dirs SET delta = ? WHERE inode = ?";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        if (delta != 0)
+            sqlite3_bind_int(stmt, 1, delta);
+        else
+            sqlite3_bind_null(stmt, 1);
+        sqlite3_bind_int64(stmt, 2, static_cast<sqlite3_int64>(inode));
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
+}
+
+void Database::set_file_delta(uint64_t dir_inode, const std::string& name, int delta) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "UPDATE files SET delta = ? WHERE dir_inode = ? AND name = ?";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        if (delta != 0)
+            sqlite3_bind_int(stmt, 1, delta);
+        else
+            sqlite3_bind_null(stmt, 1);
+        sqlite3_bind_int64(stmt, 2, static_cast<sqlite3_int64>(dir_inode));
+        sqlite3_bind_text(stmt, 3, name.c_str(), static_cast<int>(name.size()), SQLITE_STATIC);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
+}
+
+void Database::update_file(size_t dir_inode, const std::string& name, uint64_t inode, int64_t size, int64_t mtime) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "UPDATE files SET inode = ?, size = ?, mtime = ?, delta = NULL WHERE dir_inode = ? AND name = ?";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(inode));
+        sqlite3_bind_int64(stmt, 2, static_cast<sqlite3_int64>(size));
+        sqlite3_bind_int64(stmt, 3, static_cast<sqlite3_int64>(mtime));
+        sqlite3_bind_int64(stmt, 4, static_cast<sqlite3_int64>(dir_inode));
+        sqlite3_bind_text(stmt, 5, name.c_str(), static_cast<int>(name.size()), SQLITE_STATIC);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
+}
+
+void Database::mark_file_deleted(uint64_t dir_inode, const std::string& name) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "UPDATE files SET delta = 2 WHERE dir_inode = ? AND name = ?";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(dir_inode));
+        sqlite3_bind_text(stmt, 2, name.c_str(), static_cast<int>(name.size()), SQLITE_STATIC);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
+}
+
+void Database::mark_dir_deleted(uint64_t inode) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "UPDATE dirs SET delta = 2 WHERE inode = ?";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(inode));
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
+}
+
+std::optional<uint64_t> Database::find_dir_inode(const std::string& abs_path) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Get root path from config
+    auto root = read_config_json();
+    if (!root.has_value()) return std::nullopt;
+
+    std::string root_path = *root;
+    // Ensure root_path ends with /
+    if (!root_path.empty() && root_path.back() != '/') root_path += '/';
+
+    // abs_path must start with root_path
+    if (abs_path.compare(0, root_path.size(), root_path) != 0) {
+        return std::nullopt;
+    }
+
+    std::string rel = abs_path.substr(root_path.size());
+    // Remove trailing slash
+    while (!rel.empty() && rel.back() == '/') rel.pop_back();
+
+    if (rel.empty()) {
+        // We're asking for the root dir itself — find dir with parent_inode = 0
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "SELECT inode FROM dirs WHERE parent_inode IS NULL OR parent_inode = 0 LIMIT 1";
+        std::optional<uint64_t> result;
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                result = static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
+            }
+            sqlite3_finalize(stmt);
+        }
+        return result;
+    }
+
+    // Walk the path components
+    std::vector<std::string> components;
+    {
+        std::string token;
+        for (char c : rel) {
+            if (c == '/') {
+                if (!token.empty()) {
+                    components.push_back(token);
+                    token.clear();
+                }
+            } else {
+                token += c;
+            }
+        }
+        if (!token.empty()) components.push_back(token);
+    }
+
+    // Find root dir inode
+    uint64_t current_inode = 0;
+    {
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "SELECT inode FROM dirs WHERE parent_inode IS NULL OR parent_inode = 0 LIMIT 1";
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                current_inode = static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
+            } else {
+                sqlite3_finalize(stmt);
+                return std::nullopt;
+            }
+            sqlite3_finalize(stmt);
+        } else {
+            return std::nullopt;
+        }
+    }
+
+    // Walk each component
+    for (const auto& component : components) {
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "SELECT inode FROM dirs WHERE parent_inode = ? AND name = ?";
+        std::optional<uint64_t> next;
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(current_inode));
+            sqlite3_bind_text(stmt, 2, component.c_str(), static_cast<int>(component.size()), SQLITE_STATIC);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                next = static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
+            }
+            sqlite3_finalize(stmt);
+        }
+        if (!next.has_value()) return std::nullopt;
+        current_inode = *next;
+    }
+
+    return current_inode;
+}
+
+std::optional<FileEntry> Database::get_file(uint64_t dir_inode, const std::string& name) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT dir_inode, name, inode, size, mtime, covered, error, backup_id FROM files WHERE dir_inode = ? AND name = ?";
+    std::optional<FileEntry> result;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(dir_inode));
+        sqlite3_bind_text(stmt, 2, name.c_str(), static_cast<int>(name.size()), SQLITE_STATIC);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            int bid = 0;
+            if (sqlite3_column_type(stmt, 7) != SQLITE_NULL)
+                bid = sqlite3_column_int(stmt, 7);
+            result = FileEntry{
+                static_cast<uint64_t>(sqlite3_column_int64(stmt, 0)),
+                reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)),
+                static_cast<uint64_t>(sqlite3_column_int64(stmt, 2)),
+                sqlite3_column_int64(stmt, 3),
+                sqlite3_column_int64(stmt, 4),
+                sqlite3_column_int(stmt, 5),
+                sqlite3_column_int(stmt, 6),
+                bid
+            };
+        }
+        sqlite3_finalize(stmt);
+    }
+    return result;
+}
+
+std::optional<DirEntry> Database::get_dir(uint64_t inode) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT inode, parent_inode, name, covered, error FROM dirs WHERE inode = ?";
+    std::optional<DirEntry> result;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(inode));
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            DirEntry d;
+            d.inode = static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
+            if (sqlite3_column_type(stmt, 1) == SQLITE_NULL)
+                d.parent_inode = 0;
+            else
+                d.parent_inode = static_cast<uint64_t>(sqlite3_column_int64(stmt, 1));
+            const char* name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+            d.name = name ? name : "";
+            d.covered = sqlite3_column_int(stmt, 3);
+            d.error = sqlite3_column_int(stmt, 4);
+            result = d;
+        }
+        sqlite3_finalize(stmt);
+    }
+    return result;
 }
 
 } // namespace covered

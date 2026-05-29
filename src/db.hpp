@@ -21,12 +21,20 @@ enum class CoveredState : int {
     Error     = 4,  // dir or file could not be accessed (permission, IO error)
 };
 
+// delta value for update tracking
+enum class DeltaState : int {
+    Unchanged = 0,
+    New       = 1,
+    Deleted   = 2,
+};
+
 struct DirEntry {
     uint64_t inode;
     uint64_t parent_inode;  // 0 for root (no dir has inode 0)
     std::string name;
     int covered = 0;        // CoveredState, used for reporting
     int error   = 0;        // 1 if directory could not be scanned (permission etc.)
+    int delta   = 0;        // DeltaState: 0=unchanged, 1=new, 2=deleted
 };
 
 struct FileEntry {
@@ -38,6 +46,7 @@ struct FileEntry {
     int      covered;       // used for reporting at the end
     int      error;         // 1 if file could not be accessed (permission etc.)
     int      backup_id = 0; // id of the backup_db that matched this file (0 = none)
+    int      delta   = 0;   // DeltaState: 0=unchanged, 1=new, 2=deleted
 };
 
 class Database {
@@ -74,12 +83,23 @@ public:
     void migrate_backup_id_column();
     void migrate_backup_db_table();
     void migrate_drop_meta_table();
+    void migrate_delta_columns();
     int  register_backup_db(const std::string& backup_path);
     std::string get_backup_path(int backup_id);
     std::vector<DirEntry> get_all_dirs();
     std::vector<FileEntry> get_files_by_dir(uint64_t dir_inode);
     std::vector<FileEntry> get_all_files();
+    std::vector<FileEntry> get_files_in_subtree(uint64_t root_dir_inode);
+    std::vector<DirEntry> get_dirs_in_subtree(uint64_t root_dir_inode);
     void set_dir_covered(uint64_t inode, int covered);
+    void set_dir_delta(uint64_t inode, int delta);
+    void set_file_delta(uint64_t dir_inode, const std::string& name, int delta);
+    void update_file(size_t dir_inode, const std::string& name, uint64_t inode, int64_t size, int64_t mtime);
+    void mark_file_deleted(uint64_t dir_inode, const std::string& name);
+    void mark_dir_deleted(uint64_t inode);
+    std::optional<uint64_t> find_dir_inode(const std::string& abs_path);
+    std::optional<FileEntry> get_file(uint64_t dir_inode, const std::string& name);
+    std::optional<DirEntry> get_dir(uint64_t inode);
 
 
     // Shared algorithm: compute covered state for all directories (bottom-up)

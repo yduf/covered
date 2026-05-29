@@ -9,5 +9,6 @@ int cmd_scan(int argc, char* argv[]);
 int cmd_match(int argc, char* argv[]);
 int cmd_report(int argc, char* argv[]);
 int cmd_fuse(int argc, char* argv[]);
+int cmd_update(int argc, char* argv[]);
 
 #endif // COVERED_COMMANDS_HPP

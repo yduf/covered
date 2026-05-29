@@ -41,6 +41,10 @@ fuse_lib_sources = files(
     'src/fuse_main.cpp',
 )
 
+update_lib_sources = files(
+    'src/update_main.cpp',
+)
+
 # ── Old backward-compatible executables ─────────────────────────────
 
 covered_scan_size_exe = executable('covered_scan_size',
@@ -69,6 +73,12 @@ if fuse3_dep.found()
     )
 endif
 
+cover_update_exe = executable('cover_update',
+    shared_sources, update_lib_sources, files('src/main_update_stub.cpp'),
+    dependencies : [nlohmann_json_dep, sqlite3_dep, blake3_dep],
+    install : true
+)
+
 # ── Top-hat "cover" dispatcher ──────────────────────────────────────
 
 cover_deps = [nlohmann_json_dep, sqlite3_dep, blake3_dep]
@@ -82,6 +92,7 @@ cover_exe = executable('cover',
     match_lib_sources,
     report_lib_sources,
     fuse_lib_sources,
+    update_lib_sources,
     files('src/cover_main.cpp'),
     dependencies : cover_deps,
     install : true

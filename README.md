@@ -194,6 +194,7 @@ cover <subcommand> [args...]
 | `match`   | `covered_match`     | Match a source DB against a backup DB |
 | `report`  | `cover_report`      | Compute and display coverage statistics |
 | `fuse`    | `cover_fuse`        | Mount the covered filesystem via FUSE |
+| `update`  | `cover_update`      | Incrementally update a coverdb from a sub-path |
 
 The legacy executables remain available for backward compatibility.
 
@@ -234,6 +235,29 @@ Source: /media/yves/Big/
 Files   : 13146  covered=267  uncovered=12879  error=5
 Dirs    : 1870   covered=118  partial=60  uncovered=1692  empty=42  error=3
 ```
+
+## `cover update`
+
+```
+cover update [--compute-hash] <coverdb> <path>
+```
+
+| Option | Description |
+|---|---|
+| `--compute-hash` | Compute head and full blake3 hashes for new and changed files |
+
+Incrementally rescans a subtree of the filesystem (matching the coverdb root)
+and updates the database to reflect changes:
+
+- **New files** (on disk, not in DB) → inserted with `delta = 1` (new)
+- **Deleted files** (in DB, not on disk) → marked `delta = 2` (deleted)
+- **Changed files** (different size or mtime) → metadata updated, hashes recomputed
+- **New directories** → inserted with `delta = 1` (new)
+- **Disappeared directories** → marked `delta = 2` (deleted)
+
+When `--compute-hash` is set, new files also get their head and full hashes
+computed immediately. Files that changed (size or mtime) always have their
+hashes recomputed regardless of this flag.
 
 ## `cover fuse`
 
@@ -328,6 +352,7 @@ inside `coverdb/` (e.g. `coverdb/home_yves/`). Inside that directory you will fi
 | `name` | TEXT | Directory basename |
 | `covered` | INTEGER DEFAULT 0 | `0`=uncovered, `1`=covered, `2`=partial, `3`=empty, `4`=error — computed by `cover_report` |
 | `error` | INTEGER DEFAULT 0 | `1` if directory could not be scanned (permission denied, etc.) |
+| `delta` | INTEGER DEFAULT NULL | `1`=new, `2`=deleted, `NULL`=unchanged — set by `cover update` |
 
 #### `files`
 | Column | Type | Description |
@@ -340,6 +365,7 @@ inside `coverdb/` (e.g. `coverdb/home_yves/`). Inside that directory you will fi
 | `covered` | INTEGER DEFAULT 0 | `1` if a matching file exists in backup, `0` otherwise |
 | `error` | INTEGER DEFAULT NULL | `1` if file could not be accessed during match (permission denied, etc.) |
 | `backup_id` | INTEGER DEFAULT NULL | Foreign key to `backup_db.id` identifying which backup matched this file (`NULL` if unmatched) |
+| `delta` | INTEGER DEFAULT NULL | `1`=new, `2`=deleted, `NULL`=unchanged — set by `cover update` |
 
 Indexes: `idx_files_inode(inode)`, `idx_files_size(size)`
 
