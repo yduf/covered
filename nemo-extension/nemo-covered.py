@@ -283,7 +283,22 @@ class CoveredExtension(
                 item_backup.connect("activate", self._open_folder, backup_file_path)
                 items.append(item_backup)
 
-        return items if items else None
+        if not items:
+            return None
+
+        # Group all items under a "Covered ☂️" submenu
+        submenu = Nemo.Menu()
+        for item in items:
+            submenu.append_item(item)
+
+        parent_item = Nemo.MenuItem(
+            name="NemoCovered::submenu",
+            label="Covered ☂️",
+            tip="Covered backup coverage actions",
+        )
+        parent_item.set_submenu(submenu)
+
+        return [parent_item]
 
     def _open_folder(self, menu_item, folder_path):
         """Open Nemo showing the given folder."""

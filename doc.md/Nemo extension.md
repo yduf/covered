@@ -51,7 +51,8 @@ Three additional columns are available in Nemo's list view (enable via
 
 ### 4. Context Menu Items
 
-Right-clicking any item under the FUSE mount shows:
+Right-clicking any item under the FUSE mount shows a **"Covered ☂️"** submenu
+containing the following actions:
 
 #### "Open original containing folder"
 
