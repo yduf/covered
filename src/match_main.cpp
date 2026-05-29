@@ -9,6 +9,7 @@
 
 #include "db.hpp"
 #include "matcher.hpp"
+#include "commands.hpp"
 
 static std::string read_root_from_json(const std::string& path) {
     std::ifstream f(path);
@@ -24,7 +25,7 @@ static std::string read_root_from_json(const std::string& path) {
     return "";
 }
 
-int main(int argc, char* argv[]) {
+int cmd_match(int argc, char* argv[]) {
     bool debug = false;
     int arg_idx = 1;
     if (argc > 1 && std::string(argv[1]) == "-d") {

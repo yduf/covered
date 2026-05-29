@@ -10,7 +10,7 @@
 
 ## Nemo extension
 - [ ] - missing information
-  - [ ] - covered column
+  - [x]] - covered column
   - [ ] - shortened covered column
 
 

@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include "db.hpp"
+#include "commands.hpp"
 
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -944,9 +945,9 @@ static void fs_getxattr(fuse_req_t req, fuse_ino_t ino, const char* name, size_t
 // main
 // ==================================================================
 
-int main(int argc, char* argv[])
+int cmd_fuse(int argc, char* argv[])
 {
-    // We expect: cover_fuse <source_folder> <mount_point> [fuse options]
+    // We expect: cover fuse <source_folder> <mount_point> [fuse options]
     // We strip our two args and pass the rest to fuse_main.
     if (argc < 3) {
         std::cerr << "Usage: " << argv[0] << " <source_folder> <mount_point> [fuse options]\n";

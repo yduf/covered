@@ -18,15 +18,15 @@ these tools will build a database of existing files and compare them.
 It needs to have the source filesystem  and the backup file system reachable.
 
 **First scan them:**
-- scan source `./build/covered_scan_size /media/yves/Big`
-- scan backup `./build/covered_scan_size /nfs/tronaut/mnt_Backup`
+- scan source `./build/cover scan /media/yves/Big`
+- scan backup `./build/cover scan /nfs/tronaut/mnt_Backup`
 
 **Match them:**    
-`./build/covered_match covered_media_yves_Big/ covered_nfs_tronaut_mnt_Backup/`
+`./build/cover match covered_media_yves_Big/ covered_nfs_tronaut_mnt_Backup/`
 
 **Report:**     
-`./build/cover_report covered_media_yves_Big/`
-or list of uncovered files `./build/cover_report --report covered_media_yves_Big/`
+`./build/cover report covered_media_yves_Big/`
+or list of uncovered files `./build/cover report -r covered_media_yves_Big/`
 
 Easiest way is now to look at the result with Nemo. 
 
@@ -39,7 +39,7 @@ nemo -q && nemo
 
 Mount the report with FUSE:
 - `mkdir -p /tmp/covered_mount`
-- `./build/cover_fuse covered_media_yves_Big/ /tmp/covered_mount`
+- `./build/cover fuse covered_media_yves_Big/ /tmp/covered_mount`
 
 
 And now in Nemo go to `/tmp/covered_mount`
@@ -64,7 +64,7 @@ This is especially useful for remote filesystems
 (e.g. NFS, CIFS) where you want to minimize the number of passes over the data.
 Without this flag, hashes are lazily computed later during the match phase.
 
-- scan with hashes `./build/covered_scan_size --compute-hash /media/yves/Big`
+- scan with hashes `./build/cover scan --compute-hash /media/yves/Big`
 
 # Install
 
@@ -182,14 +182,46 @@ The report is done with 2 components.
 
 # CLI
 
-## `cover_report`
+The `cover` command is the top-hat entry point. All subcommands are accessed through it:
+
+```
+cover <subcommand> [args...]
+```
+
+| Subcommand | Legacy executable | Description |
+|---|---|---|
+| `scan`    | `covered_scan_size` | Scan a filesystem directory |
+| `match`   | `covered_match`     | Match a source DB against a backup DB |
+| `report`  | `cover_report`      | Compute and display coverage statistics |
+| `fuse`    | `cover_fuse`        | Mount the covered filesystem via FUSE |
+
+The legacy executables remain available for backward compatibility.
+
+## `cover scan`
+
+```
+cover scan [-f|--force] [--compute-hash] <folder>
+```
+
+| Option | Description |
+|---|---|
+| `-f` / `--force` | Overwrite existing database |
+| `--compute-hash` | Compute head and full blake3 hashes during scan |
+
+## `cover match`
+
+```
+cover match [-d] <source_folder> <backup_folder>
+```
+
+## `cover report`
 
 Computes the covered status for every **directory** in the source DB by
 aggregating its files and sub-directories (bottom-up), then writes the result
 back to the `dirs.covered` column.
 
 ```
-cover_report [--report|-r] <source_folder>
+cover report [--report|-r] <source_folder>
 ```
 
 | Option | Description |
@@ -203,7 +235,7 @@ Files   : 13146  covered=267  uncovered=12879  error=5
 Dirs    : 1870   covered=118  partial=60  uncovered=1692  empty=42  error=3
 ```
 
-## `cover_fuse`
+## `cover fuse`
 
 Mounts the source arborescence as a read-only FUSE filesystem.
 Every file and directory exposes a `user.covered` extended attribute:
@@ -220,12 +252,12 @@ Every file and directory exposes a `user.covered` extended attribute:
 | dir  | `error` | dir could not be scanned (permission etc.) |
 
 ```
-cover_fuse <source_folder> <mount_point> [fuse options]
+cover fuse <source_folder> <mount_point> [fuse options]
 ```
 
 ```sh
 mkdir -p /tmp/covered_mount
-./build/cover_fuse covered_media_yves_Big/ /tmp/covered_mount
+./build/cover fuse covered_media_yves_Big/ /tmp/covered_mount
 # runs in foreground; Ctrl-C to stop, or:
 fusermount3 -u /tmp/covered_mount
 ```

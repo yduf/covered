@@ -37,7 +37,9 @@ static std::string make_db_folder(const std::string& path) {
     return "covered_" + sanitized;
 }
 
-int main(int argc, char* argv[]) {
+#include "commands.hpp"
+
+int cmd_scan(int argc, char* argv[]) {
     bool force = false;
     bool compute_hash = false;
     std::string folder;

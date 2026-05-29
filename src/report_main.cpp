@@ -7,11 +7,12 @@
 #include <algorithm>
 
 #include "db.hpp"
+#include "commands.hpp"
 
 // -------------------------------------------------------------------
 // main
 // -------------------------------------------------------------------
-int main(int argc, char* argv[])
+int cmd_report(int argc, char* argv[])
 {
     bool do_report = false;
     std::string src_folder;

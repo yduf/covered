@@ -18,49 +18,78 @@ endif
 
 fuse3_dep = dependency('fuse3', required: false)
 
-scan_sources = files(
-    'src/main.cpp',
+# ── Source files shared across executables ──────────────────────────
+shared_sources = files(
     'src/db.cpp',
-    'src/scanner.cpp'
 )
 
-covered_scan_size_exe = executable('covered_scan_size', scan_sources,
-    dependencies : [nlohmann_json_dep, sqlite3_dep, blake3_dep],
-    install : true
+scan_lib_sources = files(
+    'src/main.cpp',
+    'src/scanner.cpp',
 )
 
-match_sources = files(
+match_lib_sources = files(
     'src/match_main.cpp',
     'src/matcher.cpp',
-    'src/db.cpp',
 )
 
-covered_match_exe = executable('covered_match', match_sources,
+report_lib_sources = files(
+    'src/report_main.cpp',
+)
+
+fuse_lib_sources = files(
+    'src/fuse_main.cpp',
+)
+
+# ── Old backward-compatible executables ─────────────────────────────
+
+covered_scan_size_exe = executable('covered_scan_size',
+    shared_sources, scan_lib_sources, files('src/main_scan_stub.cpp'),
     dependencies : [nlohmann_json_dep, sqlite3_dep, blake3_dep],
     install : true
 )
 
-report_sources = files(
-    'src/report_main.cpp',
-    'src/db.cpp',
+covered_match_exe = executable('covered_match',
+    shared_sources, match_lib_sources, files('src/main_match_stub.cpp'),
+    dependencies : [nlohmann_json_dep, sqlite3_dep, blake3_dep],
+    install : true
 )
 
-cover_report_exe = executable('cover_report', report_sources,
+cover_report_exe = executable('cover_report',
+    shared_sources, report_lib_sources, files('src/main_report_stub.cpp'),
     dependencies : [nlohmann_json_dep, sqlite3_dep],
     install : true
 )
 
 if fuse3_dep.found()
-    fuse_sources = files(
-        'src/fuse_main.cpp',
-        'src/db.cpp',
-    )
-
-    cover_fuse_exe = executable('cover_fuse', fuse_sources,
+    cover_fuse_exe = executable('cover_fuse',
+        shared_sources, fuse_lib_sources, files('src/main_fuse_stub.cpp'),
         dependencies : [nlohmann_json_dep, sqlite3_dep, fuse3_dep],
         install : true
     )
+endif
 
+# ── Top-hat "cover" dispatcher ──────────────────────────────────────
+
+cover_deps = [nlohmann_json_dep, sqlite3_dep, blake3_dep]
+if fuse3_dep.found()
+    cover_deps += fuse3_dep
+endif
+
+cover_exe = executable('cover',
+    shared_sources,
+    scan_lib_sources,
+    match_lib_sources,
+    report_lib_sources,
+    fuse_lib_sources,
+    files('src/cover_main.cpp'),
+    dependencies : cover_deps,
+    install : true
+)
+
+# ── Tests ───────────────────────────────────────────────────────────
+
+if fuse3_dep.found()
     # FUSE xattr test
     test_fuse_xattr_script = find_program('tests/test_fuse_xattr.sh')
     test('fuse_xattr', test_fuse_xattr_script,
