@@ -38,6 +38,7 @@ struct FsNode {
     uint64_t    db_inode;   // original inode from DB (for hash lookups)
     fuse_ino_t  parent_ino; // parent directory fuse inode
     int         backup_id;  // files only: id of the backup_db that matched this file (0 = none)
+    int         delta;      // DeltaState: 0=unchanged, 1=new, 2=deleted
     std::string real_path;  // files only: absolute path on real fs for read()
     std::string name;       // basename
 };
@@ -127,6 +128,7 @@ public:
             node.db_inode  = d.inode;
             node.parent_ino = parent_ino;
             node.backup_id = 0;
+            node.delta     = d.delta;
             node.real_path = dir_real_path;
             node.name      = d.name;
 
@@ -158,6 +160,7 @@ public:
             node.db_inode  = f.inode;
             node.parent_ino = parent_ino;
             node.backup_id = f.backup_id;
+            node.delta     = f.delta;
             node.real_path = real_path;
             node.name      = f.name;
 
@@ -803,7 +806,7 @@ static void fs_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
         return;
     }
 
-    size_t needed = sizeof("user.covered");
+    size_t needed = sizeof("user.covered") + sizeof("user.delta");
     bool add_extra = false;
     if (node->kind == NodeKind::File
         && node->covered == static_cast<int>(covered::CoveredState::Covered)
@@ -830,6 +833,8 @@ static void fs_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
     char* p = buf.data();
     memcpy(p, "user.covered", sizeof("user.covered"));
     p += sizeof("user.covered");
+    memcpy(p, "user.delta", sizeof("user.delta"));
+    p += sizeof("user.delta");
     if (add_extra) {
         memcpy(p, "user.covered_backup", sizeof("user.covered_backup"));
         p += sizeof("user.covered_backup");
@@ -916,6 +921,27 @@ static void fs_getxattr(fuse_req_t req, fuse_ino_t ino, const char* name, size_t
             return;
         }
         fuse_reply_buf(req, full.c_str(), vlen);
+        return;
+    }
+
+    // user.delta — update tracking state
+    if (strcmp(name, "user.delta") == 0) {
+        const char* val;
+        switch (node->delta) {
+        case 1: val = "new"; break;
+        case 2: val = "deleted"; break;
+        default: val = "unchanged"; break;
+        }
+        size_t vlen = strlen(val);
+        if (size == 0) {
+            fuse_reply_xattr(req, vlen);
+            return;
+        }
+        if (size < vlen) {
+            fuse_reply_err(req, ERANGE);
+            return;
+        }
+        fuse_reply_buf(req, val, vlen);
         return;
     }
 

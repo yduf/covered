@@ -15,7 +15,13 @@ Color mapping:
   empty     → Aqua   folder (no emblem – dir contains no files at all)
   error     → Grey   folder + emblem-unreadable (crossed circle – access error)
 
+Delta (user.delta xattr) affects visual appearance:
+  deleted   → file: additional emblem-unreadable; dir: dimmed color
+  new       → file: additional emblem-new; dir: brightened color
+
 Columns:
+  Covered   → Coverage state
+  Delta     → Update tracking state (new/deleted/unchanged)
   Backup    → Compact backup path for covered files
   Covered at → Full path of the file in the backup
 
@@ -37,6 +43,7 @@ import subprocess
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 XATTR_NAME         = b"user.covered"
+XATTR_DELTA        = b"user.delta"
 XATTR_BACKUP       = b"user.covered_backup"
 XATTR_COVERED_AT   = b"user.covered_at"
 XATTR_COVERED_SRC  = b"user.covered_source"
@@ -51,8 +58,13 @@ EMBLEM_MAP = {
     b"error":     "emblem-unreadable",  # crossed circle for access errors
 }
 
+# Additional emblems for deltas
+DELTA_FILE_EMBLEM = {
+    b"deleted": "emblem-unreadable",    # crossed circle
+    b"new":     "emblem-new",           # orange star
+}
+
 # Map xattr value → human-readable color name as it appears in colors.d JSON.
-# "Grey" is used for error folders.
 STATE_COLOR_MAP = {
     b"covered":   "Green",
     b"uncovered": "Red",
@@ -61,12 +73,28 @@ STATE_COLOR_MAP = {
     b"error":     "Grey",
 }
 
+# Dimmed color variants: we use darker/desaturated alternatives.
+# For "dim" we map to "Grey" for all states except empty.
+DIMMED_COLOR_MAP = {
+    b"covered":   "Grey",
+    b"uncovered": "Grey",
+    b"partial":   "Grey",
+    b"empty":     "Aqua",
+    b"error":     "Grey",
+}
+
+# Brightened color variants: use lighter alternatives.
+BRIGHTENED_COLOR_MAP = {
+    b"covered":   "Aqua",
+    b"uncovered": "Orange",
+    b"partial":   "Yellow",
+    b"empty":     "Aqua",
+    b"error":     "Orange",
+}
+
 # Per-session cache: file URI → last icon URI written to GIO metadata.
 # Prevents the metadata-change → update_file_info → metadata-change loop.
 _icon_cache: dict = {}
-
-# Cache for xattr values to avoid repeated system calls
-_xattr_cache: dict = {}
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -112,10 +140,12 @@ class CoveredExtension(
     Nemo.NameAndDescProvider,
 ):
     """
-    Reads user.covered xattr and:
+    Reads user.covered and user.delta xattrs and:
     - Adds a coloured emblem to files and folders.
+    - Adds delta emblems for new/deleted files.
     - Sets a coloured folder icon for directories via metadata::custom-icon,
       using the color-variant icon themes from nemo-folder-color-switcher.
+    - Dims or brightens folder colors based on delta.
     """
 
     def __init__(self):
@@ -177,6 +207,12 @@ class CoveredExtension(
             label="Covered",
             description="Backup coverage state (covered/uncovered/partial/empty/error)",
         )
+        col_delta = Nemo.Column(
+            name="NemoCovered::delta_state",
+            attribute="delta_state",
+            label="Delta",
+            description="Update tracking state (new/deleted/unchanged)",
+        )
         col_backup = Nemo.Column(
             name="NemoCovered::backup",
             attribute="covered_backup",
@@ -189,7 +225,7 @@ class CoveredExtension(
             label="Covered at",
             description="Full path to the matched file in the backup",
         )
-        return [col_covered, col_backup, col_covered_at]
+        return [col_covered, col_delta, col_backup, col_covered_at]
 
     # ── Nemo.InfoProvider ───────────────────────────────────────────────────
 
@@ -204,24 +240,49 @@ class CoveredExtension(
         if val is None:
             return Nemo.OperationResult.COMPLETE
 
-        # Emblem (files and dirs)
+        delta_val = _get_xattr(path, XATTR_DELTA)
+
+        # ── Emblems ───────────────────────────────────────────────────────
+
+        # Primary emblem (coverage)
         emblem = EMBLEM_MAP.get(val)
         if emblem:
             file.add_emblem(emblem)
 
-        # Coloured folder icon (dirs only)
+        # Delta emblem for files
+        if not file.is_directory() and delta_val:
+            delta_emblem = DELTA_FILE_EMBLEM.get(delta_val)
+            if delta_emblem:
+                file.add_emblem(delta_emblem)
+
+        # ── Coloured folder icon (dirs only) ─────────────────────────────
+
         if file.is_directory():
-            color_name = STATE_COLOR_MAP.get(val)
-            icon_uri   = self._get_folder_icon_uri(color_name) if color_name else None
+            # Determine effective color name based on coverage + delta
+            if delta_val == b"deleted":
+                color_name = DIMMED_COLOR_MAP.get(val, "Grey")
+            elif delta_val == b"new":
+                color_name = BRIGHTENED_COLOR_MAP.get(val)
+            else:
+                color_name = STATE_COLOR_MAP.get(val)
+
+            icon_uri = self._get_folder_icon_uri(color_name) if color_name else None
 
             # Only write GIO metadata when value changed (breaks update loop)
             if _icon_cache.get(uri) != icon_uri:
                 _set_custom_icon(file.get_location(), icon_uri)
                 _icon_cache[uri] = icon_uri
 
-        # Custom columns: show covered state for all files and dirs
+        # ── Custom columns ────────────────────────────────────────────────
+
         covered_label = val.decode("utf-8")
         file.add_string_attribute("covered_state", covered_label)
+
+        if delta_val:
+            delta_label = delta_val.decode("utf-8")
+        else:
+            delta_label = "unchanged"
+        file.add_string_attribute("delta_state", delta_label)
 
         # Backup columns: only for covered files (not dirs)
         if not file.is_directory() and val == b"covered":

@@ -357,7 +357,7 @@ std::vector<DirEntry> Database::get_all_dirs() {
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<DirEntry> dirs;
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "SELECT inode, parent_inode, name, covered, error FROM dirs";
+    const char* sql = "SELECT inode, parent_inode, name, covered, error, delta FROM dirs";
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             DirEntry d;
@@ -371,6 +371,7 @@ std::vector<DirEntry> Database::get_all_dirs() {
             d.name    = name ? name : "";
             d.covered = sqlite3_column_int(stmt, 3);
             d.error   = sqlite3_column_int(stmt, 4);
+            d.delta   = sqlite3_column_type(stmt, 5) == SQLITE_NULL ? 0 : sqlite3_column_int(stmt, 5);
             dirs.push_back(d);
         }
         sqlite3_finalize(stmt);
@@ -405,12 +406,15 @@ std::vector<FileEntry> Database::get_all_files() {
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<FileEntry> files;
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "SELECT dir_inode, name, inode, size, mtime, covered, error, backup_id FROM files";
+    const char* sql = "SELECT dir_inode, name, inode, size, mtime, covered, error, backup_id, delta FROM files";
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             int bid = 0;
             if (sqlite3_column_type(stmt, 7) != SQLITE_NULL)
                 bid = sqlite3_column_int(stmt, 7);
+            int d = 0;
+            if (sqlite3_column_type(stmt, 8) != SQLITE_NULL)
+                d = sqlite3_column_int(stmt, 8);
             files.push_back({
                 static_cast<uint64_t>(sqlite3_column_int64(stmt, 0)),
                 reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)),
@@ -419,7 +423,8 @@ std::vector<FileEntry> Database::get_all_files() {
                 sqlite3_column_int64(stmt, 4),
                 sqlite3_column_int(stmt, 5),
                 sqlite3_column_int(stmt, 6),
-                bid
+                bid,
+                d
             });
         }
         sqlite3_finalize(stmt);
