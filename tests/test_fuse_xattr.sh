@@ -7,7 +7,7 @@ BKP="/tmp/covered_fuse_test_bkp"
 MNT="/tmp/covered_fuse_test_mnt"
 
 # Clean up previous runs
-rm -rf "$SRC" "$BKP" "$MNT" covered_tmp_covered_fuse_test_*
+rm -rf "$SRC" "$BKP" "$MNT" coverdb/tmp_covered_fuse_test_src coverdb/tmp_covered_fuse_test_bkp
 mkdir -p "$SRC/sub/deep" "$BKP/sub/deep" "$MNT"
 
 # Create test files
@@ -24,10 +24,10 @@ printf "deep covered file"         > "$BKP/sub/deep/deep.txt"
 "$SCRIPT_DIR/../build/covered_scan_size" "$BKP"
 
 # Match
-"$SCRIPT_DIR/../build/covered_match" covered_tmp_covered_fuse_test_src covered_tmp_covered_fuse_test_bkp
+"$SCRIPT_DIR/../build/covered_match" coverdb/tmp_covered_fuse_test_src coverdb/tmp_covered_fuse_test_bkp
 
 # Run FUSE in background
-"$SCRIPT_DIR/../build/cover_fuse" covered_tmp_covered_fuse_test_src "$MNT" -f &
+"$SCRIPT_DIR/../build/cover_fuse" coverdb/tmp_covered_fuse_test_src "$MNT" -f &
 FUSE_PID=$!
 
 # Wait for mount to be ready (poll until root xattr is readable)
@@ -103,7 +103,7 @@ kill $FUSE_PID 2>/dev/null || true
 wait $FUSE_PID 2>/dev/null || true
 
 # Cleanup
-rm -rf "$SRC" "$BKP" "$MNT" covered_tmp_covered_fuse_test_*
+rm -rf "$SRC" "$BKP" "$MNT" coverdb/tmp_covered_fuse_test_src coverdb/tmp_covered_fuse_test_bkp
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

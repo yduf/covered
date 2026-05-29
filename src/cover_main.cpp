@@ -23,10 +23,10 @@ static void print_usage(const char* prog) {
               << "Examples:\n"
               << "  " << prog << " scan /media/yves/Big\n"
               << "  " << prog << " scan --compute-hash /media/yves/Big\n"
-              << "  " << prog << " match covered_media_yves_Big/ covered_nfs_tronaut_mnt_Backup/\n"
-              << "  " << prog << " report covered_media_yves_Big/\n"
-              << "  " << prog << " report -r covered_media_yves_Big/\n"
-              << "  " << prog << " fuse covered_media_yves_Big/ /tmp/covered_mount\n"
+              << "  " << prog << " match coverdb/media_yves_Big/ coverdb/nfs_tronaut_mnt_Backup/\n"
+              << "  " << prog << " report coverdb/media_yves_Big/\n"
+              << "  " << prog << " report -r coverdb/media_yves_Big/\n"
+              << "  " << prog << " fuse coverdb/media_yves_Big/ /tmp/covered_mount\n"
               << "\n"
               << "Run '" << prog << " <subcommand> --help' for subcommand-specific options.\n";
 }

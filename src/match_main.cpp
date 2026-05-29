@@ -35,7 +35,7 @@ int cmd_match(int argc, char* argv[]) {
 
     if (argc - arg_idx != 2) {
         std::cerr << "Usage: " << argv[0] << " [-d] <source_folder> <backup_folder>\n"
-                  << "  e.g.: " << argv[0] << " -d covered_home_yves covered_mnt_backup\n";
+                  << "  e.g.: " << argv[0] << " -d coverdb/home_yves coverdb/mnt_backup\n";
         return 1;
     }
 

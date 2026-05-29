@@ -9,19 +9,19 @@ MNT="/tmp/covered_fuse_ffprobe_test_mnt"
 
 # Clean up previous runs
 fusermount3 -uz "$MNT" 2>/dev/null || true
-rm -rf "$SRC" "$BKP" "$MNT" covered_tmp_covered_fuse_ffprobe_test_*
+rm -rf "$SRC" "$BKP" "$MNT" coverdb/tmp_covered_fuse_ffprobe_test_src coverdb/tmp_covered_fuse_ffprobe_test_bkp
 mkdir -p "$SRC" "$BKP" "$MNT"
 
 # Check prerequisites
 if ! command -v ffprobe &>/dev/null; then
     echo "SKIP: ffprobe not installed"
-    rm -rf "$SRC" "$BKP" "$MNT" covered_tmp_covered_fuse_ffprobe_test_*
+    rm -rf "$SRC" "$BKP" "$MNT" coverdb/tmp_covered_fuse_ffprobe_test_src coverdb/tmp_covered_fuse_ffprobe_test_bkp
     exit 77
 fi
 
 if ! command -v ffmpeg &>/dev/null; then
     echo "SKIP: ffmpeg not installed (needed to generate test video)"
-    rm -rf "$SRC" "$BKP" "$MNT" covered_tmp_covered_fuse_ffprobe_test_*
+    rm -rf "$SRC" "$BKP" "$MNT" coverdb/tmp_covered_fuse_ffprobe_test_src coverdb/tmp_covered_fuse_ffprobe_test_bkp
     exit 77
 fi
 
@@ -32,14 +32,14 @@ if ! timeout 10 ffmpeg -y \
     -c:v mpeg1video -b:v 50k \
     -f mpeg "$VIDEO_FILE" 2>/dev/null; then
     echo "SKIP: ffmpeg could not generate test video"
-    rm -rf "$SRC" "$BKP" "$MNT" covered_tmp_covered_fuse_ffprobe_test_*
+    rm -rf "$SRC" "$BKP" "$MNT" coverdb/tmp_covered_fuse_ffprobe_test_src coverdb/tmp_covered_fuse_ffprobe_test_bkp
     exit 77
 fi
 
 # Verify the generated file is parseable by ffprobe on real FS
 if ! timeout 10 ffprobe "$VIDEO_FILE" >/dev/null 2>&1; then
     echo "SKIP: generated video is not parseable by ffprobe"
-    rm -rf "$SRC" "$BKP" "$MNT" covered_tmp_covered_fuse_ffprobe_test_*
+    rm -rf "$SRC" "$BKP" "$MNT" coverdb/tmp_covered_fuse_ffprobe_test_src coverdb/tmp_covered_fuse_ffprobe_test_bkp
     exit 77
 fi
 
@@ -57,13 +57,13 @@ printf "just a text file" > "$SRC/notes.txt"
 "$SCRIPT_DIR/../build/covered_scan_size" "$BKP"
 
 # Match
-"$SCRIPT_DIR/../build/covered_match" covered_tmp_covered_fuse_ffprobe_test_src covered_tmp_covered_fuse_ffprobe_test_bkp
+"$SCRIPT_DIR/../build/covered_match" coverdb/tmp_covered_fuse_ffprobe_test_src coverdb/tmp_covered_fuse_ffprobe_test_bkp
 
 # Run cover_report to compute dir coverage
-"$SCRIPT_DIR/../build/cover_report" covered_tmp_covered_fuse_ffprobe_test_src
+"$SCRIPT_DIR/../build/cover_report" coverdb/tmp_covered_fuse_ffprobe_test_src
 
 # Run FUSE in background
-"$SCRIPT_DIR/../build/cover_fuse" covered_tmp_covered_fuse_ffprobe_test_src "$MNT" &
+"$SCRIPT_DIR/../build/cover_fuse" coverdb/tmp_covered_fuse_ffprobe_test_src "$MNT" &
 FUSE_PID=$!
 
 # Wait for mount to be ready
@@ -116,7 +116,7 @@ kill $FUSE_PID 2>/dev/null || true
 wait $FUSE_PID 2>/dev/null || true
 
 # Cleanup
-rm -rf "$SRC" "$BKP" "$MNT" covered_tmp_covered_fuse_ffprobe_test_*
+rm -rf "$SRC" "$BKP" "$MNT" coverdb/tmp_covered_fuse_ffprobe_test_src coverdb/tmp_covered_fuse_ffprobe_test_bkp
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

@@ -34,7 +34,7 @@ static std::string make_db_folder(const std::string& path) {
     if (sanitized.empty()) {
         sanitized = "root";
     }
-    return "covered_" + sanitized;
+    return "coverdb/" + sanitized;
 }
 
 #include "commands.hpp"

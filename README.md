@@ -22,11 +22,11 @@ It needs to have the source filesystem  and the backup file system reachable.
 - scan backup `./build/cover scan /nfs/tronaut/mnt_Backup`
 
 **Match them:**    
-`./build/cover match covered_media_yves_Big/ covered_nfs_tronaut_mnt_Backup/`
+`./build/cover match coverdb/media_yves_Big/ coverdb/nfs_tronaut_mnt_Backup/`
 
 **Report:**     
-`./build/cover report covered_media_yves_Big/`
-or list of uncovered files `./build/cover report -r covered_media_yves_Big/`
+`./build/cover report coverdb/media_yves_Big/`
+or list of uncovered files `./build/cover report -r coverdb/media_yves_Big/`
 
 Easiest way is now to look at the result with Nemo. 
 
@@ -39,7 +39,7 @@ nemo -q && nemo
 
 Mount the report with FUSE:
 - `mkdir -p /tmp/covered_mount`
-- `./build/cover fuse covered_media_yves_Big/ /tmp/covered_mount`
+- `./build/cover fuse coverdb/media_yves_Big/ /tmp/covered_mount`
 
 
 And now in Nemo go to `/tmp/covered_mount`
@@ -257,7 +257,7 @@ cover fuse <source_folder> <mount_point> [fuse options]
 
 ```sh
 mkdir -p /tmp/covered_mount
-./build/cover fuse covered_media_yves_Big/ /tmp/covered_mount
+./build/cover fuse coverdb/media_yves_Big/ /tmp/covered_mount
 # runs in foreground; Ctrl-C to stop, or:
 fusermount3 -u /tmp/covered_mount
 ```
@@ -305,7 +305,7 @@ The code should be good enougth to work, and algorithmicly sound enough to cover
 ## DB
 
 For each scanned filesystem folder, a dedicated output directory is created
-(e.g. `covered_home_yves/`). Inside that directory you will find:
+inside `coverdb/` (e.g. `coverdb/home_yves/`). Inside that directory you will find:
 
 | File | Purpose |
 |---|---|

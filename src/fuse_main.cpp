@@ -372,7 +372,7 @@ static std::string derive_backup_db_folder(const std::string& bkp_root_path, con
     if (sanitized.empty()) {
         sanitized = "root";
     }
-    std::string db_folder_name = "covered_" + sanitized;
+    std::string db_folder_name = sanitized;
 
     // Get sibling of source DB folder
     std::filesystem::path src_path(src_db_folder);

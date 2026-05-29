@@ -6,7 +6,7 @@ SRC="/tmp/covered_match_test_src"
 BKP="/tmp/covered_match_test_bkp"
 
 # Clean up previous runs
-rm -rf "$SRC" "$BKP" covered_tmp_covered_match_test_*
+rm -rf "$SRC" "$BKP" coverdb/tmp_covered_match_test_src coverdb/tmp_covered_match_test_bkp
 
 # Create test directories
 mkdir -p "$SRC/sub" "$BKP/sub"
@@ -30,10 +30,10 @@ printf "nested same" > "$BKP/sub/nested.txt"
 "$SCRIPT_DIR/../build/covered_scan_size" "$BKP"
 
 # Run match
-"$SCRIPT_DIR/../build/covered_match" covered_tmp_covered_match_test_src covered_tmp_covered_match_test_bkp
+"$SCRIPT_DIR/../build/covered_match" coverdb/tmp_covered_match_test_src coverdb/tmp_covered_match_test_bkp
 
 # Verify results via sqlite3
-RESULT=$(sqlite3 covered_tmp_covered_match_test_src/filesize.db "SELECT files.name, covered FROM files JOIN dirs ON files.dir_inode = dirs.inode ORDER BY files.name;")
+RESULT=$(sqlite3 coverdb/tmp_covered_match_test_src/filesize.db "SELECT files.name, covered FROM files JOIN dirs ON files.dir_inode = dirs.inode ORDER BY files.name;")
 
 # Check expected outcomes
 if ! echo "$RESULT" | grep -q "nested.txt|1"; then
@@ -52,4 +52,4 @@ fi
 echo "PASS: all match assertions passed"
 
 # Cleanup
-rm -rf "$SRC" "$BKP" covered_tmp_covered_match_test_*
+rm -rf "$SRC" "$BKP" coverdb/tmp_covered_match_test_src coverdb/tmp_covered_match_test_bkp

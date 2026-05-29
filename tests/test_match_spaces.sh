@@ -6,7 +6,7 @@ SRC="/tmp/covered_match_test_src spaces"
 BKP="/tmp/covered_match_test_bkp spaces"
 
 # Clean up previous runs
-rm -rf "$SRC" "$BKP" "covered_tmp_covered_match_test_src spaces" "covered_tmp_covered_match_test_bkp spaces"
+rm -rf "$SRC" "$BKP" "coverdb/tmp_covered_match_test_src spaces" "coverdb/tmp_covered_match_test_bkp spaces"
 
 # Create test directories with spaces in names
 mkdir -p "$SRC/sub folder" "$BKP/sub folder"
@@ -39,10 +39,10 @@ printf "deep nested" > "$BKP/sub folder/nested dir/deep file.txt"
 "$SCRIPT_DIR/../build/covered_scan_size" "$BKP"
 
 # Run match
-"$SCRIPT_DIR/../build/covered_match" "covered_tmp_covered_match_test_src spaces" "covered_tmp_covered_match_test_bkp spaces"
+"$SCRIPT_DIR/../build/covered_match" "coverdb/tmp_covered_match_test_src spaces" "coverdb/tmp_covered_match_test_bkp spaces"
 
 # Verify results via sqlite3
-SRC_DB="covered_tmp_covered_match_test_src spaces/filesize.db"
+SRC_DB="coverdb/tmp_covered_match_test_src spaces/filesize.db"
 RESULT=$(sqlite3 "$SRC_DB" "SELECT files.name, covered FROM files JOIN dirs ON files.dir_inode = dirs.inode ORDER BY files.name;")
 
 echo "Results:"
@@ -73,4 +73,4 @@ fi
 echo "PASS: all match assertions passed with spaces"
 
 # Cleanup
-rm -rf "$SRC" "$BKP" "covered_tmp_covered_match_test_src spaces" "covered_tmp_covered_match_test_bkp spaces"
+rm -rf "$SRC" "$BKP" "coverdb/tmp_covered_match_test_src spaces" "coverdb/tmp_covered_match_test_bkp spaces"
